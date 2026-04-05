@@ -1,28 +1,47 @@
 from fastapi import FastAPI, Security, HTTPException
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
 
+from core.database import init_db, close_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print(f"Trading Platform API starting in {os.getenv('APP_ENV')} mode...")
+    await init_db()   # creates tables if they don't exist
+    print("Database ready.")
+    yield
+    # Shutdown
+    await close_db()
+    print("Trading Platform API shut down.")
+
 app = FastAPI(
     title="Trading Platform API",
     version="0.1.0",
-    docs_url="/docs"
+    docs_url="/docs",
+    lifespan=lifespan
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:1420",  # Tauri dev port
-                   "http://localhost:3000"],  # Next.js if needed
+    allow_origins=[
+        "http://localhost:1420",   # Tauri desktop dev
+        "http://localhost:3000",   # web dev fallback
+        "http://localhost:8080",   # Flutter web dev
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 API_KEY = os.getenv("API_KEY")
-api_key_header = APIKeyHeader(name="X-API-Key")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 async def verify_api_key(key: str = Security(api_key_header)):
     if key != API_KEY:
@@ -31,12 +50,16 @@ async def verify_api_key(key: str = Security(api_key_header)):
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "env": os.getenv("APP_ENV", "development")
+    }
 
 @app.get("/secure-health", tags=["system"])
 async def secure_health(key: str = Security(verify_api_key)):
     return {"status": "ok", "authenticated": True}
 
-@app.get("/")
+@app.get("/", tags=["system"])
 def read_root():
-    return {"message": "API is running"}
+    return {"message": "Trading Platform API is running. Visit /docs for API reference."}
