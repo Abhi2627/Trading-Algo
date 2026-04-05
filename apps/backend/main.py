@@ -8,16 +8,15 @@ import os
 load_dotenv()
 
 from core.database import init_db, close_db
+from api.routes.assets import router as assets_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     print(f"Trading Platform API starting in {os.getenv('APP_ENV')} mode...")
-    await init_db()   # creates tables if they don't exist
+    await init_db()
     print("Database ready.")
     yield
-    # Shutdown
     await close_db()
     print("Trading Platform API shut down.")
 
@@ -63,3 +62,8 @@ async def secure_health(key: str = Security(verify_api_key)):
 @app.get("/", tags=["system"])
 def read_root():
     return {"message": "Trading Platform API is running. Visit /docs for API reference."}
+
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
+app.include_router(assets_router)

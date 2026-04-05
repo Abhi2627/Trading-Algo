@@ -40,9 +40,10 @@ class Settings(BaseSettings):
     EVENING_REPORT_HOUR: int = 15
     EVENING_REPORT_MINUTE: int = 30
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+    }
 
 
 @lru_cache()
