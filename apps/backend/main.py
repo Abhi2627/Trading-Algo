@@ -7,15 +7,15 @@ import os
 
 load_dotenv()
 
-from core.database import init_db, close_db
+from core.database import close_db
 from api.routes.assets import router as assets_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"Trading Platform API starting in {os.getenv('APP_ENV')} mode...")
-    await init_db()
-    print("Database ready.")
+    # DB tables are managed by Alembic migrations, not create_all
+    # Run: alembic upgrade head — before starting the app in production
     yield
     await close_db()
     print("Trading Platform API shut down.")

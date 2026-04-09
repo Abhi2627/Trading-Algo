@@ -1,22 +1,36 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 venv/
 .env
 *.egg-info/
+.pytest_cache/
 
-# Data & models (too large for git)
+# Data & models (too large for git — stored on Kaggle / downloaded at runtime)
 apps/backend/data/raw/
 apps/backend/data/processed/
 apps/backend/data/trained_models/
+*.pth
+*.pt
+*.pkl
 
 # IDE
 .vscode/settings.json
 .idea/
+*.swp
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Docker
+# Docker volumes
 postgres_data/
+redis_data/
+
+# Logs
+*.log
+logs/
+
+# Alembic — keep versions folder but not __pycache__ inside it
+apps/backend/alembic/versions/__pycache__/
