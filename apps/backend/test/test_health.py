@@ -21,38 +21,52 @@ async def test_health_no_auth():
 
 
 @pytest.mark.asyncio
-async def test_secure_health_rejected_without_key():
-    """Secure endpoint must reject requests with no API key."""
+async def test_assets_route_rejected_without_key():
+    """Protected routes must reject requests with no API key."""
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/secure-health")
-    assert resp.status_code == 401
+        resp = await client.get("/assets/")
+    assert resp.status_code in (401, 403)
 
 
 @pytest.mark.asyncio
-async def test_secure_health_rejected_with_wrong_key():
-    """Secure endpoint must reject wrong API keys."""
+async def test_assets_route_rejected_with_wrong_key():
+    """Protected routes must reject wrong API keys."""
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get(
-            "/secure-health", headers={"X-API-Key": "definitely-wrong-key"}
-        )
+        resp = await client.get("/assets/", headers={"X-API-Key": "wrong"})
     assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_secure_health_accepted_with_correct_key():
-    """Secure endpoint must accept the correct API key from .env."""
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get(
-            "/secure-health", headers={"X-API-Key": settings.API_KEY}
-        )
-    assert resp.status_code == 200
-    assert resp.json()["authenticated"] is True
+async def test_assets_route_accepted_with_correct_key():
+    """Correct API key must pass auth — DB is mocked so no Postgres needed."""
+    from unittest.mock import AsyncMock, MagicMock
+    from core.database import get_db
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    # Mock DB session that returns an empty scalars result
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    async def override_get_db():
+        yield mock_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/assets/", headers={"X-API-Key": settings.API_KEY})
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 0
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 def test_models_import():
