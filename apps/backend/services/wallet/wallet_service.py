@@ -67,10 +67,15 @@ class WalletService:
                 "trade_id":      str(trade.id),
             })
 
-        # Update unrealised in wallet object (not persisted here)
-        wallet.unrealized_pnl = total_unrealised
+        # Do NOT mutate wallet here — summary is read-only
+        # Pass computed unrealised into drawdown calculation directly
+        effective_equity  = wallet.cash_balance + wallet.invested_balance + total_unrealised
+        peak              = wallet.peak_equity if wallet.peak_equity > 0 else effective_equity
+        drawdown          = max(0.0, (peak - effective_equity) / peak)
+        intraday_alloc    = effective_equity * 0.25
+        positional_alloc  = effective_equity * 0.75
 
-        budget = get_risk_manager().check_daily_budget(wallet.total_equity)
+        budget = get_risk_manager().check_daily_budget(effective_equity)
         daily_loss = await self._daily_realised_loss(db)
 
         return {
@@ -78,17 +83,17 @@ class WalletService:
             "invested_balance": round(wallet.invested_balance, 2),
             "unrealised_pnl":   round(total_unrealised, 2),
             "realised_pnl":     round(wallet.realized_pnl, 2),
-            "total_equity":     round(wallet.total_equity, 2),
-            "peak_equity":      round(wallet.peak_equity, 2),
-            "drawdown_pct":     round(wallet.drawdown_pct * 100, 2),
+            "total_equity":     round(effective_equity, 2),
+            "peak_equity":      round(peak, 2),
+            "drawdown_pct":     round(drawdown, 4),
             "risk_mode":        wallet.risk_mode.value,
             "monthly_topup":    wallet.monthly_topup,
-            "intraday_allocation":   round(wallet.intraday_allocation, 2),
-            "positional_allocation": round(wallet.positional_allocation, 2),
+            "intraday_allocation":   round(intraday_alloc, 2),
+            "positional_allocation": round(positional_alloc, 2),
             "daily_budget": {
-                "profit_target":    budget["profit_target"],
-                "loss_limit":       budget["loss_limit"],
-                "loss_used_today":  round(daily_loss, 2),
+                "profit_target":         budget["profit_target"],
+                "loss_limit":            budget["loss_limit"],
+                "loss_used_today":       round(daily_loss, 2),
                 "remaining_loss_budget": round(budget["loss_limit"] - daily_loss, 2),
             },
             "open_positions": positions,

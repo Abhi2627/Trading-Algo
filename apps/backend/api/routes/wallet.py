@@ -34,7 +34,13 @@ async def wallet_summary(
     _: str = Security(verify_key),
 ):
     """Full wallet snapshot: balances, positions, drawdown, daily budget."""
-    return await get_wallet_service().get_summary(db)
+    try:
+        result = await get_wallet_service().get_summary(db)
+        await db.commit()
+        return result
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/trade/open")

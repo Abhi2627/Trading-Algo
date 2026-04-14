@@ -29,11 +29,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:1420",   # Tauri desktop dev
-        "http://localhost:3000",   # web dev fallback
-        "http://localhost:8080",   # Flutter web dev
-    ],
+    allow_origins=["*"],  # local dev — restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
