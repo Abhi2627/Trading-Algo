@@ -34,13 +34,7 @@ async def wallet_summary(
     _: str = Security(verify_key),
 ):
     """Full wallet snapshot: balances, positions, drawdown, daily budget."""
-    try:
-        result = await get_wallet_service().get_summary(db)
-        await db.commit()
-        return result
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    return await get_wallet_service().get_summary(db)
 
 
 @router.post("/trade/open")
@@ -85,3 +79,48 @@ async def apply_topup(
 ):
     """Manually trigger monthly top-up (normally called by Celery beat)."""
     return await get_wallet_service().apply_monthly_topup(db)
+
+
+@router.get("/history")
+async def trade_history(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """Return closed trades in reverse chronological order."""
+    from sqlalchemy import select, desc
+    from core.models import Trade, Asset, TradeStatus
+
+    result = await db.execute(
+        select(Trade, Asset)
+        .join(Asset, Trade.asset_id == Asset.id)
+        .where(Trade.status == TradeStatus.closed)
+        .order_by(desc(Trade.exit_time))
+        .limit(min(limit, 200))
+    )
+    rows = result.all()
+
+    return {
+        "count": len(rows),
+        "trades": [
+            {
+                "trade_id":    str(t.id),
+                "symbol":      a.symbol,
+                "name":        a.name,
+                "action":      t.action.value,
+                "quantity":    t.quantity,
+                "entry_price": t.entry_price,
+                "exit_price":  t.exit_price,
+                "realized_pnl":round(t.realized_pnl or 0.0, 2),
+                "pnl_pct":     round(
+                    ((t.exit_price - t.entry_price) / t.entry_price * 100)
+                    if t.exit_price else 0.0, 2
+                ),
+                "trade_type":  t.trade_type.value,
+                "entry_time":  t.entry_time.isoformat(),
+                "exit_time":   t.exit_time.isoformat() if t.exit_time else None,
+                "notes":       t.notes,
+            }
+            for t, a in rows
+        ],
+    }

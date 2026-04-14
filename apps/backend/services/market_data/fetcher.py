@@ -46,7 +46,7 @@ def to_yf_symbol(symbol: str) -> str:
 
 def fetch_historical(
     symbol: str,
-    period_days: int = 365,
+    period_days: int = 730,
     interval: str = "1d",
 ) -> Optional[pd.DataFrame]:
     """
@@ -95,9 +95,11 @@ def fetch_historical(
             "Volume": "volume",
         })
 
-        df = df[["open", "high", "low", "close", "volume"]].copy()
+        df = df["open high low close volume".split()].copy()
         df.index.name = "datetime"
-        df = df.dropna()
+        # Only drop rows where close price is missing — volume NaN is acceptable
+        df = df.dropna(subset=["close"])
+        df["volume"] = df["volume"].fillna(0)
 
         logger.info(f"Fetched {len(df)} rows for {symbol} interval={interval}")
         return df

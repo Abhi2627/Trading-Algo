@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from core.models import Asset, Signal, SignalAction
+from core.models import Asset, Signal, SignalAction, Trade, TradeStatus
 from services.market_data.fetcher import fetch_historical
 from services.market_data.features import get_latest_features, detect_market_regime, compute_features
 from models.rl.agent import get_rl_agent
@@ -34,8 +34,8 @@ async def generate_signal(
         logger.error(f"Asset not found: {symbol}")
         return None
 
-    # 2. Fetch OHLCV (365 days for features, need 60+ rows minimum)
-    df = fetch_historical(symbol, period_days=365, interval="1d")
+    # 2. Fetch OHLCV (730 days for features, need 60+ rows minimum)
+    df = fetch_historical(symbol, period_days=730, interval="1d")
     if df is None or len(df) < 60:
         logger.error(f"Insufficient data for {symbol}")
         return None
@@ -70,6 +70,27 @@ async def generate_signal(
         market_regime=regime,
     )
     audit = ensemble.audit_record(result_signal, rl_output, transformer_output, sentiment_output)
+
+    # 6. Position-aware action remapping
+    # If the model says SELL but we hold no position: remap to HOLD (avoid entry)
+    # If the model says BUY  but we already hold:     remap to HOLD (avoid double entry)
+    open_trade_result = await db.execute(
+        select(Trade)
+        .where(Trade.asset_id == asset.id)
+        .where(Trade.status == TradeStatus.open)
+        .limit(1)
+    )
+    has_open_position = open_trade_result.scalar_one_or_none() is not None
+
+    raw_action = result_signal["action"]  # buy | sell | hold
+    if raw_action == "sell" and not has_open_position:
+        result_signal["action"] = "hold"
+        result_signal["signal_action"] = SignalAction.hold
+        logger.info(f"{symbol}: SELL remapped to HOLD (no open position to close)")
+    elif raw_action == "buy" and has_open_position:
+        result_signal["action"] = "hold"
+        result_signal["signal_action"] = SignalAction.hold
+        logger.info(f"{symbol}: BUY remapped to HOLD (position already open)")
 
     # 6. Persist signal
     signal = Signal(
