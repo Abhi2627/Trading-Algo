@@ -1,5 +1,12 @@
 # infra/backtesting/backtest_engine.py
 import sys, os
+
+# Must load .env before any backend import — config.py reads env at import time
+_env = os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'backend', '.env')
+if os.path.exists(_env):
+    from dotenv import load_dotenv
+    load_dotenv(_env, override=True)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'backend'))
 
 import pandas as pd
@@ -9,10 +16,61 @@ from transaction_costs import get_cost_model
 from performance_metrics import Trade, PerformanceCalculator
 from services.market_data.fetcher import fetch_historical
 from services.market_data.features import compute_features, detect_market_regime
-from models.rl.agent import get_rl_agent
-from models.transformer.forecaster import get_forecaster
-from models.sentiment.sentiment_service import get_sentiment_service
-from models.ensemble.ensemble import get_ensemble_engine
+
+
+def _rule_based_signal(features: dict, regime: str) -> dict:
+    """
+    Technical signal v3 — calibrated for NSE large-caps.
+    Target: 30+ trades per year, 3:1 RR ratio.
+
+    Strategy: EMA trend-following with momentum confirmation.
+    Entry when trend is established, momentum is positive, not overbought.
+    """
+    rsi        = features.get('rsi_14')             or 50.0
+    ema50_200  = features.get('ema50_above_ema200') or 0
+    close_ema50= features.get('close_vs_ema50')     or 0.0
+    adx        = features.get('adx')                or 0.0
+    vol_ratio  = features.get('volume_ratio')        or 1.0
+    macd       = features.get('macd_line')           or 0.0
+    macd_above = features.get('macd_above_signal')   or 0
+    obv_above  = features.get('obv_above_ma')        or 0
+
+    # Skip highly volatile regime only
+    if regime == 'volatile':
+        return {'action': 'hold', 'confidence': 0.0}
+
+    # Core conditions
+    rsi_ok     = 1.0 if 40 <= rsi <= 68   else 0.0   # wider RSI range
+    trend_ok   = 1.0 if ema50_200 == 1    else 0.0   # golden cross required
+    price_ok   = 1.0 if close_ema50 > -0.02 else 0.0  # allow slight dip below EMA50
+    adx_ok     = 1.0 if adx >= 20         else 0.0   # ADX >= 20 (any trend)
+    macd_ok    = 1.0 if macd_above == 1   else 0.0   # MACD cross is enough
+    vol_ok     = 1.0 if vol_ratio >= 0.8  else 0.5   # relaxed volume
+    obv_ok     = 1.0 if obv_above == 1    else 0.5   # OBV above MA preferred
+
+    # Minimum requirements: trend + not overbought + MACD cross
+    must_pass = (trend_ok == 1.0 and rsi_ok == 1.0 and macd_ok == 1.0)
+    if not must_pass:
+        return {'action': 'hold', 'confidence': 0.0}
+
+    # Weighted score
+    score = (
+        rsi_ok    * 0.20 +
+        trend_ok  * 0.25 +
+        price_ok  * 0.15 +
+        adx_ok    * 0.15 +
+        macd_ok   * 0.10 +
+        vol_ok    * 0.08 +
+        obv_ok    * 0.07
+    )
+
+    if regime == 'trending':
+        score = min(score * 1.1, 1.0)
+
+    return {
+        'action':     'buy' if score >= 0.50 else 'hold',
+        'confidence': round(score, 4),
+    }
 
 
 @dataclass
@@ -23,10 +81,11 @@ class BacktestConfig:
     initial_capital:  float = 100000.0
     max_position_pct: float = 0.10
     min_confidence:   float = 0.50
-    stop_loss_pct:    float = 0.05
-    take_profit_pct:  float = 0.09
+    stop_loss_pct:    float = 0.07
+    take_profit_pct:  float = 0.21
     is_largecap:      bool  = True
-    warmup_days:      int   = 60
+    warmup_days:      int   = 250
+    max_open_positions: int = 12
 
 
 class BacktestEngine:
@@ -41,14 +100,24 @@ class BacktestEngine:
 
     def run(self) -> dict:
         print(f"Downloading data for {len(self.cfg.symbols)} symbols...")
-        all_data = {}
+        all_data     = {}
+        all_features = {}  # precompute full features for each symbol
         for sym in self.cfg.symbols:
-            df = fetch_historical(sym, period_days=730)
-            if df is not None and len(df) >= self.cfg.warmup_days:
-                all_data[sym] = df
-                print(f"  {sym}: {len(df)} rows")
-            else:
-                print(f"  {sym}: SKIPPED")
+            df = fetch_historical(sym, period_days=1825)  # 5 years
+            if df is None:
+                print(f"  {sym}: SKIPPED (download failed)")
+                continue
+            features_df = compute_features(df)
+            if features_df is None or len(features_df) < 50:
+                print(f"  {sym}: SKIPPED (insufficient features)")
+                continue
+            all_data[sym]     = df
+            all_features[sym] = features_df
+            print(f"  {sym}: {len(df)} rows, {len(features_df)} valid feature rows")
+            print(f"    features: {features_df.index[0].date()} to {features_df.index[-1].date()}")
+
+        if not all_data:
+            raise ValueError("No valid data downloaded")
 
         start = pd.Timestamp(self.cfg.start_date)
         end   = pd.Timestamp(self.cfg.end_date)
@@ -56,32 +125,32 @@ class BacktestEngine:
 
         print(f"\nRunning {start.date()} to {end.date()} ({len(dates)} days)")
 
-        rl_agent   = get_rl_agent()
-        forecaster = get_forecaster()
-        sentiment  = get_sentiment_service()
-        ensemble   = get_ensemble_engine()
-
         for i, today in enumerate(dates):
             self._fill_pending(all_data, today)
             self._check_exits(all_data, today)
 
-            for sym, df in all_data.items():
+            for sym in all_data:
                 if sym in self.positions:
                     continue
-                hist = df[df.index <= today]
-                if len(hist) < self.cfg.warmup_days:
-                    continue
-                features_df = compute_features(hist)
-                if features_df is None or len(features_df) < 2:
-                    continue
-                latest    = features_df.iloc[-1].to_dict()
-                regime    = detect_market_regime(hist)
-                hist_feats = [r.to_dict() for _, r in features_df.tail(60).iterrows()]
-                rl_out   = rl_agent.predict(latest)
-                tf_out   = forecaster.predict(hist_feats)
-                sent_out = {"score": 0.0, "label": "neutral"}
-                result   = ensemble.blend(rl_output=rl_out, transformer_output=tf_out,
-                               sentiment_output=sent_out, market_regime=regime)
+                # Respect max concurrent positions
+                if len(self.positions) >= self.cfg.max_open_positions:
+                    break
+
+                # Use precomputed features sliced to today — no lookahead
+                features_df = all_features[sym]
+                feat_today  = features_df[features_df.index <= today]
+                if len(feat_today) < 10:
+                    continue  # not enough history yet
+
+                latest = feat_today.iloc[-1].to_dict()
+                # Replace NaN with 0 to be safe
+                latest = {k: (v if isinstance(v, (int, float)) and not np.isnan(v) else 0.0)
+                          for k, v in latest.items()}
+
+                hist   = all_data[sym][all_data[sym].index <= today]
+                regime = detect_market_regime(hist)
+                result = _rule_based_signal(latest, regime)
+
                 if result["action"] == "buy" and result["confidence"] >= self.cfg.min_confidence:
                     price = float(hist["close"].iloc[-1])
                     size  = min(self.cash * self.cfg.max_position_pct * result["confidence"],

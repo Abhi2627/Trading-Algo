@@ -11,6 +11,12 @@
 #                                       (slides forward 6 months each time)
 
 import sys, os
+
+_env = os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'backend', '.env')
+if os.path.exists(_env):
+    from dotenv import load_dotenv
+    load_dotenv(_env, override=True)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'backend'))
 
 import pandas as pd
@@ -78,7 +84,7 @@ class WalkForwardValidator:
                     "test_start": test_start,
                     "test_end":   test_end,
                     "trades":     len(trades),
-                    "sharpe":     report.sharpe_ratio,
+                    "sharpe":     report.monthly_sharpe,
                     "return_pct": report.total_return_pct,
                     "max_dd":     report.max_drawdown_pct,
                     "win_rate":   report.win_rate_pct,
@@ -86,7 +92,7 @@ class WalkForwardValidator:
                 })
                 oos_trades.extend(trades)
                 oos_equity_all.append(equity_curve)
-                print(f"  -> {len(trades)} trades | Sharpe={report.sharpe_ratio:.3f} "
+                print(f"  -> {len(trades)} trades | Monthly Sharpe={report.monthly_sharpe:.3f} "
                       f"| Return={report.total_return_pct:+.2f}%\n")
             else:
                 print(f"  -> Not enough trades ({len(trades)}), skipping metrics\n")
@@ -137,8 +143,8 @@ class WalkForwardValidator:
         print(f"  Windows tested:     {summary['windows_tested']}")
         print(f"  Profitable windows: {summary['windows_profitable']} "
               f"({summary['consistency_pct']:.0f}%)")
-        print(f"  Avg Sharpe:         {summary['avg_sharpe']:.3f}")
-        print(f"  Min Sharpe:         {summary['min_sharpe']:.3f}")
+        print(f"  Avg Sharpe (monthly): {summary['avg_sharpe']:.3f}")
+        print(f"  Min Sharpe (monthly): {summary['min_sharpe']:.3f}")
         print(f"  Avg Return:         {summary['avg_return_pct']:+.2f}%")
         print(f"  Avg Max Drawdown:   {summary['avg_max_dd_pct']:.2f}%")
         print(f"  Avg Win Rate:       {summary['avg_win_rate_pct']:.1f}%")
