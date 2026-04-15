@@ -2,13 +2,13 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { 
+  TrendingUp, 
   Wallet as WalletIcon, 
   Banknote, 
-  TrendingUp, 
   ArrowDownCircle,
   AlertCircle
 } from 'lucide-react';
-import { getWalletSummary, getSignalHistory } from '../lib/api';
+import { getWalletSummary, getTopPicks, TopPick } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import StatCard from '../components/StatCard';
 import SignalBadge from '../components/SignalBadge';
@@ -35,28 +35,14 @@ const Dashboard: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  const topSymbols = ['NSE:RELIANCE', 'NSE:TCS', 'NSE:HDFCBANK', 'CRYPTO:BTC', 'CRYPTO:ETH'];
-
-  const {
-    data: signalsData,
-    isLoading: isSignalsLoading
-  } = useQuery<({ symbol: string } & import("../lib/api").Signal)[]>(
-    {
-      queryKey: ["dashboard-signals"],
-      queryFn: async () => {
-        const results = await Promise.allSettled(
-          topSymbols.map(async (symbol) => {
-            const history = await getSignalHistory(symbol, 1);
-            return history.signals[0] ? { ...history.signals[0], symbol } : undefined;
-          })
-        );
-        return results
-          .filter((r): r is PromiseFulfilledResult<({ symbol: string } & import("../lib/api").Signal)> => r.status === "fulfilled" && r.value !== undefined)
-          .map(r => r.value);
-      },
-      refetchInterval: 10000,
-    }
-  );
+  const { data: topPicksData, isLoading: isSignalsLoading } = useQuery<TopPick[]>({
+    queryKey: queryKeys.topPicks,
+    queryFn: async () => {
+      const res = await getTopPicks(5);
+      return res.picks;
+    },
+    refetchInterval: 30000,
+  });
 
   if (isWalletLoading || isSignalsLoading) {
     return (
@@ -105,44 +91,53 @@ const Dashboard: React.FC = () => {
         />
       </div>
 
-      {/* Middle Section: Top Signals */}
+      {/* Middle Section: Today's Top Picks */}
       <section>
         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
           <TrendingUp className="text-accent" />
-          Top Signals
+          Today's Top Picks
         </h2>
+        {!topPicksData || topPicksData.length === 0 ? (
+          <div className="bg-background-surface border border-dashed border-border-default rounded-xl p-8 text-center text-text-muted">
+            No top picks yet — Celery scan runs at 8:30 AM, or generate signals manually from the Signals page.
+          </div>
+        ) : (
         <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
-          {signalsData?.map((signal) => (
+          {topPicksData.map((pick) => (
             <div 
-              key={signal?.signal_id}
+              key={pick.signal_id}
               onClick={() => navigate('/signals')}
-              className="min-w-[280px] bg-background-surface border border-border-default rounded-xl p-5 cursor-pointer hover:border-accent transition-all group"
+              className="min-w-[260px] bg-background-surface border border-green/30 rounded-xl p-5 cursor-pointer hover:border-accent transition-all group"
             >
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex justify-between items-start mb-3">
                 <div>
-                  <h3 className="font-bold text-lg group-hover:text-accent transition-colors">{signal?.symbol}</h3>
-                  <span className="text-[10px] text-text-muted uppercase tracking-widest">
-                    {signal?.created_at ? new Date(signal.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : ''}
-                  </span>
+                  <h3 className="font-bold text-lg group-hover:text-accent transition-colors">{pick.symbol}</h3>
+                  <span className="text-[10px] text-text-muted uppercase tracking-widest">{pick.market_regime}</span>
                 </div>
-                {signal?.action && <SignalBadge action={signal.action} confidence={signal.confidence} size="sm" />}
+                <SignalBadge action={pick.action} confidence={pick.confidence / 100} size="sm" />
               </div>
-
-              <div className="space-y-3">
+              <div className="space-y-2">
+                {pick.rsi != null && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-text-secondary">RSI</span>
+                    <span className="font-mono text-amber">{pick.rsi.toFixed(1)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-xs">
-                  <span className="text-text-secondary">Market Regime</span>
-                  <span className="text-accent font-medium capitalize">{signal?.market_regime}</span>
+                  <span className="text-text-secondary">Confidence</span>
+                  <span className="font-mono text-green">{pick.confidence.toFixed(1)}%</span>
                 </div>
                 <div className="w-full bg-background-elevated h-1.5 rounded-full overflow-hidden">
                   <div 
-                    className="h-full bg-accent rounded-full transition-all duration-500" 
-                    style={{ width: `${(signal?.confidence ?? 0) * 100}%` }}
+                    className="h-full bg-green rounded-full transition-all duration-500" 
+                    style={{ width: `${pick.confidence}%` }}
                   />
                 </div>
               </div>
             </div>
           ))}
         </div>
+        )}
       </section>
 
       {/* Bottom Section: Positions & Risk */}

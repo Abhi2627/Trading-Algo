@@ -95,11 +95,50 @@ export interface WalletSummary {
   open_count: number;
 }
 
+export interface TopPick {
+  signal_id: string;
+  symbol: string;
+  name: string;
+  asset_type: string;
+  action: 'buy' | 'sell' | 'hold';
+  confidence: number;
+  ensemble_score: number;
+  market_regime: string;
+  rsi: number | null;
+  created_at: string;
+}
+
+export interface TopPicksResponse {
+  date: string;
+  count: number;
+  picks: TopPick[];
+}
+
+export interface TradeHistory {
+  count: number;
+  trades: TradeHistoryItem[];
+}
+
+export interface TradeHistoryItem {
+  trade_id: string;
+  symbol: string;
+  name: string;
+  action: string;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  realized_pnl: number;
+  pnl_pct: number;
+  trade_type: string;
+  entry_time: string;
+  exit_time: string | null;
+  notes: string | null;
+}
+
 export interface TradeResult {
   approved: boolean;
   reason?: string;
   trade_id?: string;
-  symbol?: string;
   quantity?: number;
   entry_price?: number;
   position_size?: number;
@@ -217,6 +256,23 @@ export const explainSignal = async (signalId: string): Promise<ExplainResponse> 
 
 export const healthCheck = async (): Promise<{ status: string; env: string }> => {
   const { data } = await api.get('/health');
+  return data;
+};
+
+export const getTopPicks = async (
+  limit = 5,
+  minConfidence = 0.50,
+): Promise<TopPicksResponse> => {
+  const { data } = await api.get<TopPicksResponse>('/signals/top-picks', {
+    params: { limit, min_confidence: minConfidence },
+  });
+  return data;
+};
+
+export const getTradeHistory = async (limit = 50): Promise<TradeHistory> => {
+  const { data } = await api.get<TradeHistory>('/wallet/history', {
+    params: { limit },
+  });
   return data;
 };
 

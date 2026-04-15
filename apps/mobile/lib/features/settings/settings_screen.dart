@@ -27,7 +27,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     _keyCtrl.text = prefs.getString('api_key')  ?? 'abhay-algotrade-2025';
-    _urlCtrl.text = prefs.getString('base_url') ?? 'http://10.0.2.2:8000';
+    _urlCtrl.text = prefs.getString('base_url') ?? 'http://10.27.204.58:8000';
   }
 
   Future<void> _save() async {
@@ -54,7 +54,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 10),
           _Field(
             label: 'Backend URL',
-            hint:  'http://10.0.2.2:8000',
+            hint:  'http://YOUR_MAC_IP:8000',
             ctrl:  _urlCtrl,
             icon:  Icons.link_rounded,
           ),

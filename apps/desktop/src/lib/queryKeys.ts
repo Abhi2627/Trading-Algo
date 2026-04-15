@@ -4,6 +4,8 @@ export const queryKeys = {
   assetFeatures: (symbol: string) => ['assets', symbol, 'features'] as const,
   signal: (symbol: string) => ['signals', symbol, 'latest'] as const,
   signalHistory: (symbol: string) => ['signals', symbol, 'history'] as const,
+  topPicks: ['signals', 'top-picks'] as const,
   wallet: ['wallet', 'summary'] as const,
+  tradeHistory: ['wallet', 'history'] as const,
   health: ['health'] as const,
 };

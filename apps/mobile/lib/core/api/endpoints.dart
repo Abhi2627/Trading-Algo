@@ -26,6 +26,12 @@ class Endpoints {
     return list.map((e) => Asset.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<List<dynamic>> getSections() async {
+    final resp = await _dio.get('/assets/sections');
+    final list = resp.data['sections'] as List;
+    return list;
+  }
+
   Future<AssetPrice> getAssetPrice(String symbol) async {
     final resp = await _dio.get('/assets/${Uri.encodeComponent(symbol)}/price');
     return AssetPrice.fromJson(resp.data as Map<String, dynamic>);
@@ -53,6 +59,14 @@ class Endpoints {
     );
     final list = resp.data['signals'] as List;
     return list.map((e) => Signal.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getTopPicks(
+      {int limit = 5, double minConfidence = 0.50}) async {
+    final resp = await _dio.get('/signals/top-picks',
+        queryParameters: {'limit': limit, 'min_confidence': minConfidence});
+    final list = resp.data['picks'] as List;
+    return list.cast<Map<String, dynamic>>();
   }
 
   // ---- Wallet ----

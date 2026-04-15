@@ -193,6 +193,7 @@ class BacktestEngine:
             self.positions[sym] = {
                 "qty": order["qty"], "entry_price": fill, "entry_date": today,
                 "stop": order["stop"], "target": order["target"],
+                "highest_since_entry": fill,
                 "confidence": order["confidence"], "regime": order["regime"],
                 "entry_cost": cost.total,
             }
@@ -210,7 +211,14 @@ class BacktestEngine:
             if td.empty:
                 continue
             low, high = float(td["low"].iloc[0]), float(td["high"].iloc[0])
-            if low <= pos["stop"]:
+
+            # Update trailing stop tracker
+            pos["highest_since_entry"] = max(pos["highest_since_entry"], high)
+            trailing_stop = pos["highest_since_entry"] * 0.90  # 10% trail
+
+            if low <= trailing_stop:
+                to_close.append((sym, trailing_stop, "trailing_stop", today))
+            elif low <= pos["stop"]:
                 to_close.append((sym, pos["stop"], "stop_loss", today))
             elif high >= pos["target"]:
                 to_close.append((sym, pos["target"], "take_profit", today))

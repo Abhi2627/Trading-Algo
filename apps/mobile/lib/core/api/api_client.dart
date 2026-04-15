@@ -1,10 +1,12 @@
 // core/api/api_client.dart
 // Single Dio instance used by all API calls.
-// API key is read from SharedPreferences so the user can configure it in Settings.
+// Base URL priority: SharedPreferences (set in Settings) > default LAN IP
+// To find your Mac's current IP: ipconfig getifaddr en0
+// Set URL directly in the app's Settings screen without rebuilding.
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String _defaultBaseUrl = 'http://10.0.2.2:8000'; // Android emulator -> localhost
+const String _defaultBaseUrl = 'http://10.27.204.58:8000'; // Mac LAN IP for S23 device
 const String _prefKeyApiKey  = 'api_key';
 const String _prefKeyBaseUrl = 'base_url';
 
@@ -19,8 +21,9 @@ Future<Dio> buildDio() async {
   final dio = Dio(
     BaseOptions(
       baseUrl: baseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(seconds: 30),
       headers: {
         'X-API-Key':     apiKey,
         'Content-Type':  'application/json',

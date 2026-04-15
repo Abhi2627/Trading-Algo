@@ -1,10 +1,8 @@
 // features/dashboard/dashboard_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:dio/dio.dart';
 import '../../core/api/endpoints.dart';
 import '../../core/models/wallet.dart';
-import '../../core/models/signal.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/stat_card.dart';
 import '../../shared/widgets/signal_badge.dart';
@@ -16,20 +14,9 @@ final walletProvider = FutureProvider<WalletSummary>((ref) async {
   return Endpoints(dio).getWalletSummary();
 });
 
-final dashboardSignalsProvider = FutureProvider<List<Signal>>((ref) async {
-  final dio    = await ref.watch(dioProvider.future);
-  final ep     = Endpoints(dio);
-  const syms   = ['NSE:RELIANCE','NSE:TCS','NSE:HDFCBANK','CRYPTO:BTC','CRYPTO:ETH'];
-  final results = await Future.wait(
-    syms.map((s) async {
-      try {
-        final signals = await ep.getSignalHistory(s, limit: 1);
-        if (signals.isNotEmpty) { signals[0].symbol = s; return signals[0]; }
-      } catch (_) {}
-      return null;
-    }),
-  );
-  return results.whereType<Signal>().toList();
+final dashboardSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  final dio = await ref.watch(dioProvider.future);
+  return Endpoints(dio).getTopPicks(limit: 5);
 });
 
 String _inr(double v) {
@@ -120,25 +107,25 @@ class DashboardScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 20),
 
-              // Top signals
-              const Text('Top Signals',
+              // Top picks
+              const Text('Today\'s Top Picks',
                   style: TextStyle(color: AppColors.textPrimary,
                       fontSize: 15, fontWeight: FontWeight.w700)),
               const SizedBox(height: 10),
               signalsAsync.when(
                 loading: () => const SizedBox(height: 80, child: LoadingState()),
                 error:   (_, __) => const SizedBox(),
-                data: (signals) => signals.isEmpty
+                data: (picks) => picks.isEmpty
                     ? const EmptyState(
-                        message: 'No signals yet. Generate them from the Signals screen.',
+                        message: 'No top picks yet.\nCelery scan runs at 8:30 AM,\nor generate signals manually.',
                         icon: Icons.show_chart_rounded)
                     : SizedBox(
                         height: 130,
                         child: ListView.separated(
                           scrollDirection: Axis.horizontal,
-                          itemCount: signals.length,
+                          itemCount: picks.length,
                           separatorBuilder: (_, __) => const SizedBox(width: 10),
-                          itemBuilder: (_, i) => _SignalCard(signal: signals[i]),
+                          itemBuilder: (_, i) => _TopPickCard(pick: picks[i]),
                         ),
                       ),
               ),
@@ -167,19 +154,28 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
-class _SignalCard extends StatelessWidget {
-  final Signal signal;
-  const _SignalCard({required this.signal});
+class _TopPickCard extends StatelessWidget {
+  final Map<String, dynamic> pick;
+  const _TopPickCard({required this.pick});
 
   @override
   Widget build(BuildContext context) {
+    final confidence = (pick['confidence'] as num).toDouble();
+    final action     = pick['action'] as String;
+    final symbol     = pick['symbol'] as String;
+    final regime     = pick['market_regime'] as String? ?? '';
+    final rsi        = pick['rsi'] as num?;
+
     return Container(
       width: 200,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color:        AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border:       Border.all(color: AppColors.borderDef),
+        border: Border.all(
+          color: AppColors.green.withOpacity(0.4),
+          width: 1.5,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,30 +184,39 @@ class _SignalCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text(signal.symbol ?? '',
+                child: Text(symbol,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    )),
+                      fontWeight: FontWeight.w700, fontSize: 13)),
               ),
-              SignalBadge(action: signal.action,
-                  confidence: signal.confidence, small: true),
+              SignalBadge(action: action,
+                  confidence: confidence / 100, small: true),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(signal.marketRegime.toUpperCase(),
-              style: const TextStyle(
-                color: AppColors.accent, fontSize: 9,
-                fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text(regime.toUpperCase(),
+                  style: const TextStyle(
+                    color: AppColors.accent, fontSize: 9,
+                    fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+              if (rsi != null) ...
+                [
+                  const SizedBox(width: 8),
+                  Text('RSI ${rsi.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                        color: AppColors.textMuted, fontSize: 9)),
+                ],
+            ],
+          ),
           const SizedBox(height: 6),
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
-              value:            signal.confidence,
-              backgroundColor:  AppColors.elevated,
-              valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+              value:           confidence / 100,
+              backgroundColor: AppColors.elevated,
+              valueColor:      const AlwaysStoppedAnimation(AppColors.green),
               minHeight: 3,
             ),
           ),
