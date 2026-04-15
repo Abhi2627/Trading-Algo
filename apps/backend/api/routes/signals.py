@@ -71,6 +71,58 @@ async def latest_signal(
     }
 
 
+@router.get("/top-picks")
+async def top_picks(
+    limit: int = 5,
+    min_confidence: float = 0.50,
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Return today's highest-confidence BUY signals across all assets.
+    This is the daily watchlist — sorted by ensemble score descending.
+    Run POST /signals/generate/{symbol} for each asset first (or let Celery do it).
+    """
+    from datetime import date, datetime, timezone
+    from sqlalchemy import desc
+    from core.models import Signal, Asset, SignalAction
+
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
+        tzinfo=timezone.utc
+    )
+
+    result = await db.execute(
+        select(Signal, Asset)
+        .join(Asset, Signal.asset_id == Asset.id)
+        .where(Signal.created_at >= today_start)
+        .where(Signal.confidence >= min_confidence)
+        .where(Signal.action == SignalAction.buy)
+        .order_by(desc(Signal.ensemble_score))
+        .limit(min(limit, 20))
+    )
+    rows = result.all()
+
+    return {
+        "date":  date.today().isoformat(),
+        "count": len(rows),
+        "picks": [
+            {
+                "signal_id":     str(s.id),
+                "symbol":        a.symbol,
+                "name":          a.name,
+                "asset_type":    a.asset_type.value,
+                "action":        s.action.value,
+                "confidence":    round(s.confidence * 100, 1),
+                "ensemble_score":round(s.ensemble_score, 4),
+                "market_regime": s.market_regime,
+                "rsi":           (s.technical_indicators or {}).get("rsi_14"),
+                "created_at":    s.created_at.isoformat(),
+            }
+            for s, a in rows
+        ],
+    }
+
+
 @router.get("/history/{symbol}")
 async def signal_history(
     symbol: str,

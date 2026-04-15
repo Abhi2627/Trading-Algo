@@ -23,6 +23,28 @@ async def verify_key(key: str = Security(api_key_header)):
     return key
 
 
+@router.get("/sections")
+async def list_sections(
+    _: str = Security(verify_key),
+):
+    """
+    Returns all market sections with their constituent symbols.
+    Used by frontend to render grouped watchlists.
+    """
+    from services.market_data.assets import SECTIONS
+    return {
+        "sections": [
+            {
+                "id":     section_id,
+                "label":  label,
+                "count":  len(symbols),
+                "symbols": [sym for sym, _ in symbols],
+            }
+            for section_id, label, symbols in SECTIONS
+        ]
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /assets
 # ---------------------------------------------------------------------------

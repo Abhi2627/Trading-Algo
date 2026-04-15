@@ -34,8 +34,8 @@ async def generate_signal(
         logger.error(f"Asset not found: {symbol}")
         return None
 
-    # 2. Fetch OHLCV (730 days for features, need 60+ rows minimum)
-    df = fetch_historical(symbol, period_days=730, interval="1d")
+    # 2. Fetch OHLCV (5 years for features, need 200+ rows for EMA200)
+    df = fetch_historical(symbol, period_days=1825, interval="1d")
     if df is None or len(df) < 60:
         logger.error(f"Insufficient data for {symbol}")
         return None
