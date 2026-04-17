@@ -212,13 +212,19 @@ class BacktestEngine:
                 continue
             low, high = float(td["low"].iloc[0]), float(td["high"].iloc[0])
 
-            # Update trailing stop tracker
+            # Update trailing high
             pos["highest_since_entry"] = max(pos["highest_since_entry"], high)
-            trailing_stop = pos["highest_since_entry"] * 0.90  # 10% trail
 
-            if low <= trailing_stop:
-                to_close.append((sym, trailing_stop, "trailing_stop", today))
-            elif low <= pos["stop"]:
+            # Only activate trailing stop after 15% gain (lock in profits)
+            # Before that, use hard stop only
+            unrealised_pct = (pos["highest_since_entry"] - pos["entry_price"]) / pos["entry_price"]
+            if unrealised_pct >= 0.15:
+                trailing_stop = pos["highest_since_entry"] * 0.88  # 12% trail from peak
+                if low <= trailing_stop:
+                    to_close.append((sym, trailing_stop, "trailing_stop", today))
+                    continue
+
+            if low <= pos["stop"]:
                 to_close.append((sym, pos["stop"], "stop_loss", today))
             elif high >= pos["target"]:
                 to_close.append((sym, pos["target"], "take_profit", today))
