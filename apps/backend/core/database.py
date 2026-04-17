@@ -28,7 +28,7 @@ class Base(DeclarativeBase):
 async def get_db():
     """
     FastAPI dependency — inject with: db: AsyncSession = Depends(get_db)
-    Commits on success, rolls back on any exception.
+    Commits on success, rolls back on any exception (including HTTPException).
     """
     async with AsyncSessionLocal() as session:
         try:
@@ -37,8 +37,7 @@ async def get_db():
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()
+        # No finally close needed — AsyncSessionLocal context manager handles it
 
 
 async def init_db():

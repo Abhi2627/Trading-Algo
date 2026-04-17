@@ -45,7 +45,9 @@ class PriceForecaster:
                 return
 
             # Load checkpoint (contains weights + metadata)
-            checkpoint = torch.load(str(model_path), map_location="cpu")
+            # weights_only=False required: checkpoint contains Python objects (lists, dicts)
+            # This is safe here because we own the checkpoint file
+            checkpoint = torch.load(str(model_path), map_location="cpu", weights_only=False)
             self._meta = {
                 "n_features":   checkpoint["n_features"],
                 "feature_cols": checkpoint["feature_cols"],
@@ -81,7 +83,7 @@ class PriceForecaster:
             )
 
         except Exception as e:
-            logger.error(f"Failed to load Transformer: {e}")
+            logger.exception(f"Failed to load Transformer: {e}")
             self.is_ready = False
 
     def _build_model(self, n_features, d_model, n_heads, n_layers, seq_len, n_outputs):

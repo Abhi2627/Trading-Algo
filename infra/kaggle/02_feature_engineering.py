@@ -4,7 +4,7 @@
 # =============================================================================
 # HOW TO USE:
 # 1. Create a new Kaggle notebook
-# 2. Add dataset: abhay1226/trading-platform-ohlcv
+# 2. Add dataset: abhay1226/trading-platform-ohlcv-v2
 # 3. Set accelerator: None (CPU is fine for this)
 # 4. Paste this entire file as cells
 # 5. Run All — takes ~5 minutes
@@ -24,7 +24,7 @@ import pandas_ta as ta
 import json
 from pathlib import Path
 
-INPUT_DIR  = Path("/kaggle/input/trading-platform-ohlcv")
+INPUT_DIR  = Path("/kaggle/input/trading-platform-ohlcv-v2")
 OUTPUT_DIR = Path("/kaggle/working/features")
 OUTPUT_DIR.mkdir(exist_ok=True)
 

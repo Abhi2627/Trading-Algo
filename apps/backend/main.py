@@ -6,7 +6,7 @@ import os
 
 load_dotenv()
 
-from core.database import close_db
+from core.database import close_db, init_db
 from api.routes.assets import router as assets_router
 from api.routes.signals import router as signals_router
 from api.routes.wallet import router as wallet_router
@@ -16,6 +16,7 @@ from api.routes.chat import router as chat_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"Trading Platform API starting in {os.getenv('APP_ENV')} mode...")
+    await init_db()   # creates tables if they don't exist (idempotent)
     yield
     await close_db()
     print("Trading Platform API shut down.")

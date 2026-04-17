@@ -93,21 +93,42 @@ def compute_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     f["ema21_above_ema50"] = (f["ema_21"] > f["ema_50"]).astype(int)
     f["ema50_above_ema200"]= (f["ema_50"] > f["ema_200"]).astype(int)
 
-    # MACD
+    # MACD — use column name matching, not fragile positional iloc
     macd_df = ta.macd(f["close"], fast=12, slow=26, signal=9)
     if macd_df is not None and not macd_df.empty:
-        f["macd_line"]      = macd_df.iloc[:, 0]  # MACD line
-        f["macd_signal"]    = macd_df.iloc[:, 2]  # Signal line
-        f["macd_histogram"] = macd_df.iloc[:, 1]  # Histogram
+        cols = list(macd_df.columns)
+        # Column naming varies by pandas_ta version:
+        #   pandas_ta:         MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
+        #   pandas_ta_classic: MACD_12_26_9, MACDs_12_26_9, MACDh_12_26_9  (or similar)
+        # Detect by name prefix to be version-agnostic
+        macd_col  = next((c for c in cols if c.startswith("MACD_")), None)
+        macds_col = next((c for c in cols if c.startswith("MACDs_")), None)
+        macdh_col = next((c for c in cols if c.startswith("MACDh_")), None)
+        if macd_col and macds_col and macdh_col:
+            f["macd_line"]      = macd_df[macd_col]
+            f["macd_signal"]    = macd_df[macds_col]
+            f["macd_histogram"] = macd_df[macdh_col]
+        else:
+            # Fallback: positional but log a warning
+            logger.warning(f"MACD columns unexpected: {cols} — falling back to iloc")
+            f["macd_line"]      = macd_df.iloc[:, 0]
+            f["macd_signal"]    = macd_df.iloc[:, min(2, len(cols)-1)]
+            f["macd_histogram"] = macd_df.iloc[:, min(1, len(cols)-1)]
         f["macd_above_signal"] = (f["macd_line"] > f["macd_signal"]).astype(int)
     else:
         f["macd_line"] = f["macd_signal"] = f["macd_histogram"] = 0.0
         f["macd_above_signal"] = 0
 
-    # ADX — trend strength (0-100, above 25 = trending)
+    # ADX — detect column by name prefix, not fragile positional iloc
     adx_df = ta.adx(f["high"], f["low"], f["close"], length=14)
     if adx_df is not None and not adx_df.empty:
-        f["adx"] = adx_df.iloc[:, 0]
+        cols = list(adx_df.columns)
+        adx_col = next((c for c in cols if c.startswith("ADX")), None)
+        if adx_col:
+            f["adx"] = adx_df[adx_col]
+        else:
+            logger.warning(f"ADX columns unexpected: {cols} — falling back to iloc")
+            f["adx"] = adx_df.iloc[:, 0]
     else:
         f["adx"] = 0.0
 
@@ -122,11 +143,19 @@ def compute_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     f["rsi_overbought"]  = (f["rsi_14"] > 70).astype(int)
     f["rsi_oversold"]    = (f["rsi_14"] < 30).astype(int)
 
-    # Stochastic
+    # Stochastic — name-based column extraction
     stoch_df = ta.stoch(f["high"], f["low"], f["close"], k=14, d=3)
     if stoch_df is not None and not stoch_df.empty:
-        f["stoch_k"] = stoch_df.iloc[:, 0]
-        f["stoch_d"] = stoch_df.iloc[:, 1]
+        cols = list(stoch_df.columns)
+        k_col = next((c for c in cols if "STOCHk" in c or c.startswith("K")), None)
+        d_col = next((c for c in cols if "STOCHd" in c or c.startswith("D")), None)
+        if k_col and d_col:
+            f["stoch_k"] = stoch_df[k_col]
+            f["stoch_d"] = stoch_df[d_col]
+        else:
+            logger.warning(f"Stoch columns unexpected: {cols} — falling back to iloc")
+            f["stoch_k"] = stoch_df.iloc[:, 0]
+            f["stoch_d"] = stoch_df.iloc[:, min(1, len(cols)-1)]
     else:
         f["stoch_k"] = f["stoch_d"] = 50.0
 
@@ -136,14 +165,25 @@ def compute_features(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     # -----------------------------------------------------------------------
     # 6. Volatility bands
     # -----------------------------------------------------------------------
-    # Bollinger Bands
+    # Bollinger Bands — name-based column extraction
     bb_df = ta.bbands(f["close"], length=20, std=2)
     if bb_df is not None and not bb_df.empty:
-        f["bb_upper"]     = bb_df.iloc[:, 0]
-        f["bb_mid"]       = bb_df.iloc[:, 1]
-        f["bb_lower"]     = bb_df.iloc[:, 2]
-        f["bb_width"]     = (f["bb_upper"] - f["bb_lower"]) / f["bb_mid"]
-        f["bb_position"]  = (f["close"] - f["bb_lower"]) / (f["bb_upper"] - f["bb_lower"] + 1e-9)
+        cols = list(bb_df.columns)
+        # BBU = upper, BBM = mid, BBL = lower
+        upper_col = next((c for c in cols if "BBU" in c), None)
+        mid_col   = next((c for c in cols if "BBM" in c), None)
+        lower_col = next((c for c in cols if "BBL" in c), None)
+        if upper_col and mid_col and lower_col:
+            f["bb_upper"] = bb_df[upper_col]
+            f["bb_mid"]   = bb_df[mid_col]
+            f["bb_lower"] = bb_df[lower_col]
+        else:
+            logger.warning(f"BB columns unexpected: {cols} — falling back to iloc")
+            f["bb_upper"] = bb_df.iloc[:, 0]
+            f["bb_mid"]   = bb_df.iloc[:, min(1, len(cols)-1)]
+            f["bb_lower"] = bb_df.iloc[:, min(2, len(cols)-1)]
+        f["bb_width"]    = (f["bb_upper"] - f["bb_lower"]) / f["bb_mid"]
+        f["bb_position"] = (f["close"] - f["bb_lower"]) / (f["bb_upper"] - f["bb_lower"] + 1e-9)
     else:
         f["bb_width"] = f["bb_position"] = 0.5
 

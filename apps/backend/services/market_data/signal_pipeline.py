@@ -34,42 +34,47 @@ async def generate_signal(
         logger.error(f"Asset not found: {symbol}")
         return None
 
-    # 2. Fetch OHLCV (5 years for features, need 200+ rows for EMA200)
-    df = fetch_historical(symbol, period_days=1825, interval="1d")
-    if df is None or len(df) < 60:
-        logger.error(f"Insufficient data for {symbol}")
+    try:
+        # 2. Fetch OHLCV (5 years for features, need 200+ rows for EMA200)
+        df = fetch_historical(symbol, period_days=1825, interval="1d")
+        if df is None or len(df) < 60:
+            logger.error(f"Insufficient data for {symbol}")
+            return None
+
+        # 3. Compute features
+        features_df = compute_features(df)
+        if features_df is None:
+            logger.error(f"Feature computation failed for {symbol}")
+            return None
+
+        latest_features = features_df.iloc[-1].to_dict()
+        regime = detect_market_regime(df)
+
+        # Build feature history list for Transformer (needs SEQ_LEN=60 dicts)
+        features_history = [row.to_dict() for _, row in features_df.tail(60).iterrows()]
+
+        # 4. Run models in parallel conceptually; sequential here for simplicity
+        rl_agent   = get_rl_agent()
+        forecaster = get_forecaster()
+        sentiment  = get_sentiment_service()
+        ensemble   = get_ensemble_engine()
+
+        rl_output          = rl_agent.predict(latest_features, portfolio_state or {})
+        transformer_output = forecaster.predict(features_history)
+        sentiment_output   = await sentiment.analyse(headlines or [], symbol=symbol)
+
+        # 5. Ensemble
+        result_signal = ensemble.combine(
+            rl_output=rl_output,
+            transformer_output=transformer_output,
+            sentiment_output=sentiment_output,
+            market_regime=regime,
+        )
+        audit = ensemble.audit_record(result_signal, rl_output, transformer_output, sentiment_output)
+
+    except Exception as e:
+        logger.exception(f"Signal pipeline crash for {symbol}: {e}")
         return None
-
-    # 3. Compute features
-    features_df = compute_features(df)
-    if features_df is None:
-        logger.error(f"Feature computation failed for {symbol}")
-        return None
-
-    latest_features = features_df.iloc[-1].to_dict()
-    regime = detect_market_regime(df)
-
-    # Build feature history list for Transformer (needs SEQ_LEN=60 dicts)
-    features_history = [row.to_dict() for _, row in features_df.tail(60).iterrows()]
-
-    # 4. Run models in parallel conceptually; sequential here for simplicity
-    rl_agent   = get_rl_agent()
-    forecaster = get_forecaster()
-    sentiment  = get_sentiment_service()
-    ensemble   = get_ensemble_engine()
-
-    rl_output          = rl_agent.predict(latest_features, portfolio_state or {})
-    transformer_output = forecaster.predict(features_history)
-    sentiment_output   = await sentiment.analyse(headlines or [], symbol=symbol)
-
-    # 5. Ensemble
-    result_signal = ensemble.combine(
-        rl_output=rl_output,
-        transformer_output=transformer_output,
-        sentiment_output=sentiment_output,
-        market_regime=regime,
-    )
-    audit = ensemble.audit_record(result_signal, rl_output, transformer_output, sentiment_output)
 
     # 6. Position-aware action remapping
     # If the model says SELL but we hold no position: remap to HOLD (avoid entry)

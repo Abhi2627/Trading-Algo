@@ -9,23 +9,24 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Regime-aware ensemble weights
-# Each regime shifts how much we trust each model.
-# Must sum to 1.0 per regime.
+# Transformer weight reduced to 0.10 until directional accuracy > 52%
+# Current transformer accuracy: ~49% (below random) — needs more training data
+# Increase transformer weights once retrained on larger dataset
 # ---------------------------------------------------------------------------
 REGIME_WEIGHTS = {
     "trending": {
-        "rl":          0.35,
-        "transformer": 0.45,   # forecaster is strongest in trends
+        "rl":          0.70,   # RL carries most weight until transformer improves
+        "transformer": 0.10,
         "sentiment":   0.20,
     },
     "volatile": {
-        "rl":          0.45,   # RL handles chaos best
-        "transformer": 0.20,
-        "sentiment":   0.35,   # news drives volatile moves
+        "rl":          0.65,
+        "transformer": 0.10,
+        "sentiment":   0.25,
     },
     "ranging": {
-        "rl":          0.40,
-        "transformer": 0.35,
+        "rl":          0.65,
+        "transformer": 0.10,
         "sentiment":   0.25,
     },
 }
