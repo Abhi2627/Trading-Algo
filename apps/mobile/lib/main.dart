@@ -11,6 +11,7 @@ import 'features/chat/chat_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'shared/theme.dart';
 import 'shared/widgets/splash_screen.dart';
+import 'package:flutter_riverpod/legacy.dart';
 
 final dioProvider = FutureProvider<Dio>((ref) => buildDio());
 final activeTabProvider = StateProvider<int>((ref) => 0);

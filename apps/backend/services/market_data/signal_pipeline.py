@@ -8,6 +8,7 @@ from sqlalchemy import select
 from core.models import Asset, Signal, SignalAction, Trade, TradeStatus
 from services.market_data.fetcher import fetch_historical
 from services.market_data.features import get_latest_features, detect_market_regime, compute_features
+from services.news.news_fetcher import get_headlines_for_symbol
 from models.rl.agent import get_rl_agent
 from models.transformer.forecaster import get_forecaster
 from models.sentiment.sentiment_service import get_sentiment_service
@@ -53,7 +54,7 @@ async def generate_signal(
         # Build feature history list for Transformer (needs SEQ_LEN=60 dicts)
         features_history = [row.to_dict() for _, row in features_df.tail(60).iterrows()]
 
-        # 4. Run models in parallel conceptually; sequential here for simplicity
+        # 4. Run models
         rl_agent   = get_rl_agent()
         forecaster = get_forecaster()
         sentiment  = get_sentiment_service()
@@ -61,7 +62,15 @@ async def generate_signal(
 
         rl_output          = rl_agent.predict(latest_features, portfolio_state or {})
         transformer_output = forecaster.predict(features_history)
-        sentiment_output   = await sentiment.analyse(headlines or [], symbol=symbol)
+
+        # Auto-fetch headlines if none supplied
+        # This is the key change: sentiment now always has real data
+        if headlines is None:
+            headlines = await get_headlines_for_symbol(symbol)
+            if headlines:
+                logger.debug(f"{symbol}: auto-fetched {len(headlines)} headlines")
+
+        sentiment_output = await sentiment.analyse(headlines or [], symbol=symbol)
 
         # 5. Ensemble
         result_signal = ensemble.combine(
@@ -112,9 +121,7 @@ async def generate_signal(
             for k in ["rsi_14", "macd_line", "adx", "bb_width",
                       "volume_ratio", "atr_pct", "close_vs_ema50"]
         },
-        sentiment_sources=[
-            {"headline": h, "source": "news"} for h in (headlines or [])
-        ],
+        sentiment_sources=[{"headline": h, "source": "rss"} for h in (headlines or [])],
         is_intraday=False,
     )
     db.add(signal)

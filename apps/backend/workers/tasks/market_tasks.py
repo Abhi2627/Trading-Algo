@@ -39,6 +39,13 @@ async def _scan_all_assets_async() -> dict:
     from core.models import Asset, AssetType
     from sqlalchemy import select
     from services.market_data.signal_pipeline import generate_signal
+    from services.news.news_fetcher import clear_cache, fetch_global_headlines
+
+    # Clear stale cache and pre-fetch all headlines once
+    # (cheaper than fetching per-symbol 108 times)
+    clear_cache()
+    await fetch_global_headlines()
+    logger.info("News headlines pre-fetched for morning scan")
 
     results = {"generated": 0, "failed": 0, "skipped": 0}
 

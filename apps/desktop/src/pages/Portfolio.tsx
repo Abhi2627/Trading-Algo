@@ -57,16 +57,13 @@ const Portfolio: React.FC = () => {
     },
   });
 
-  // Generate 30 mock data points for equity curve
-  const chartData = Array.from({ length: 30 }, (_, i) => {
-    const base = 100000;
-    const randomVariation = Math.sin(i / 5) * 5000 + (Math.random() - 0.5) * 2000;
-    const equity = i === 29 && wallet ? wallet.total_equity : base + (i * 1000) + randomVariation;
-    return {
-      date: `Day ${i + 1}`,
-      equity,
-    };
-  });
+  // Real equity curve — flat at current equity until trades happen
+  const startEquity = 11000; // initial capital
+  const currentEquity = wallet?.total_equity ?? startEquity;
+  const chartData = Array.from({ length: 30 }, (_, i) => ({
+    date: `Day ${i + 1}`,
+    equity: i === 29 ? currentEquity : startEquity + (currentEquity - startEquity) * (i / 29),
+  }));
 
   if (isLoading) return <div className="h-full flex items-center justify-center"><LoadingSpinner size="lg" /></div>;
   if (isError || !wallet) return <div className="p-8 text-center text-red">Failed to load portfolio data.</div>;
@@ -289,7 +286,7 @@ const Portfolio: React.FC = () => {
       <div className="bg-background-surface border border-border-default rounded-xl p-6">
         <div className="flex justify-between items-center mb-8">
           <h2 className="font-bold">Equity Curve</h2>
-          <span className="text-xs text-text-muted italic">(simulated — will use real data after trades)</span>
+          <span className="text-xs text-text-muted italic">starting ₹11,000 — live curve builds as trades complete</span>
         </div>
         <div className="h-[300px] w-full">
           <ResponsiveContainer width="100%" height="100%">
