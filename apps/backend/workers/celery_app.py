@@ -1,6 +1,14 @@
 # workers/celery_app.py
 # Celery instance, beat schedule, and shared async runner.
 # All tasks import `celery_app` from here.
+import sys
+import os
+
+# Ensure backend root is in Python path for all worker processes
+_backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from celery import Celery
 from celery.schedules import crontab
 from core.config import settings

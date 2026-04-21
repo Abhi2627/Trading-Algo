@@ -38,8 +38,15 @@ const Dashboard: React.FC = () => {
   const { data: topPicksData, isLoading: isSignalsLoading } = useQuery<TopPick[]>({
     queryKey: queryKeys.topPicks,
     queryFn: async () => {
-      const res = await getTopPicks(5);
-      return res.picks;
+      const res = await getTopPicks(10);
+      // Deduplicate: if same stock appears on both NSE and BSE, keep NSE only
+      const seen = new Set<string>();
+      return res.picks.filter((pick: TopPick) => {
+        const stockName = pick.symbol.split(':').pop() ?? pick.symbol;
+        if (seen.has(stockName)) return false;
+        seen.add(stockName);
+        return true;
+      }).slice(0, 5);
     },
     refetchInterval: 30000,
   });
@@ -106,13 +113,17 @@ const Dashboard: React.FC = () => {
           {topPicksData.map((pick) => (
             <div 
               key={pick.signal_id}
-              onClick={() => navigate('/signals')}
+              onClick={() => navigate('/signals', { state: { symbol: pick.symbol } })}
               className="min-w-[260px] bg-background-surface border border-green/30 rounded-xl p-5 cursor-pointer hover:border-accent transition-all group"
             >
               <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h3 className="font-bold text-lg group-hover:text-accent transition-colors">{pick.symbol}</h3>
-                  <span className="text-[10px] text-text-muted uppercase tracking-widest">{pick.market_regime}</span>
+                <div className="min-w-0 flex-1 mr-2">
+                  <h3 className="font-bold text-lg group-hover:text-accent transition-colors truncate">
+                    {pick.symbol.split(':').pop()}
+                  </h3>
+                  <span className="text-[10px] text-text-muted uppercase tracking-widest">
+                    {pick.symbol.split(':')[0]} · {pick.market_regime}
+                  </span>
                 </div>
                 <SignalBadge action={pick.action} confidence={pick.confidence / 100} size="sm" />
               </div>

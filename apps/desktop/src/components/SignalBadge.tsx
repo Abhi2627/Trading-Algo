@@ -39,11 +39,9 @@ const SignalBadge: React.FC<SignalBadgeProps> = ({ action, confidence, size = 'm
   const iconSize = size === 'sm' ? 12 : 14;
 
   return (
-    <div className={`inline-flex items-center gap-1.5 font-bold rounded-full border ${config.bg} ${config.text} border-current ${sizeClasses}`}>
+    <div className={`inline-flex items-center gap-1 font-bold rounded-full border whitespace-nowrap shrink-0 ${config.bg} ${config.text} border-current ${sizeClasses}`}>
       <Icon size={iconSize} strokeWidth={3} />
-      <span>
-        {config.label} {(confidence * 100).toFixed(0)}%
-      </span>
+      <span>{config.label} {(confidence * 100).toFixed(0)}%</span>
     </div>
   );
 };

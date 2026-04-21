@@ -1,6 +1,14 @@
 # workers/tasks/market_tasks.py
 # Scheduled tasks for signal generation across all active assets.
+import sys
+import os
 import logging
+
+# Fix sys.path for Celery fork workers — must be before any local imports
+_backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from workers.celery_app import celery_app, run_async
 
 logger = logging.getLogger(__name__)
@@ -22,6 +30,11 @@ def scan_all_assets(self):
 
 async def _scan_all_assets_async() -> dict:
     """Async implementation — called by the sync Celery task wrapper."""
+    import sys, os
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+
     from core.database import AsyncSessionLocal
     from core.models import Asset, AssetType
     from sqlalchemy import select
@@ -81,6 +94,11 @@ def generate_signal_for_symbol(symbol: str, headlines: list = None):
 
 
 async def _generate_single(symbol: str, headlines: list) -> dict:
+    import sys, os
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+
     from core.database import AsyncSessionLocal
     from services.market_data.signal_pipeline import generate_signal
 

@@ -1,6 +1,13 @@
 # workers/tasks/wallet_tasks.py
 # Stop-loss enforcement, intraday force-close, monthly top-up.
+import sys
+import os
 import logging
+
+_backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
+
 from workers.celery_app import celery_app, run_async
 
 logger = logging.getLogger(__name__)

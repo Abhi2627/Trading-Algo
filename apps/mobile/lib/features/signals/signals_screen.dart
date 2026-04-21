@@ -328,56 +328,66 @@ class _TopPotentialsStrip extends StatelessWidget {
   }
 }
 
-class _TopPickChip extends StatelessWidget {
+class _TopPickChip extends ConsumerWidget {
   final Map<String, dynamic> pick;
-  const _TopPickChip({required this.pick});
+  final ValueChanged<Asset>? onAssetTap;
+  const _TopPickChip({required this.pick, this.onAssetTap});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final symbol = pick['symbol'] as String;
     final conf = (pick['confidence'] as num).toDouble();
     final regime = pick['market_regime'] as String? ?? '';
     final rsi = pick['rsi'] as num?;
 
-    return Container(
-      width: 130,
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.green.withOpacity(0.4), width: 1.5),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(symbol.split(':').last,
-              style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 12)),
-          Text(regime.toUpperCase(),
-              style: const TextStyle(
-                  color: AppColors.accent,
-                  fontSize: 8,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5)),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('${conf.toStringAsFixed(0)}%',
-                  style: const TextStyle(
-                      color: AppColors.green,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700)),
-              if (rsi != null)
-                Text('RSI ${rsi.toStringAsFixed(0)}',
+    return GestureDetector(
+      onTap: () {
+        final assetsData = ref.read(assetsProvider).value ?? [];
+        final asset = assetsData.where((a) => a.symbol == symbol).firstOrNull;
+        if (asset != null) {
+          ref.read(selectedAssetProvider.notifier).select(asset);
+        }
+      },
+      child: Container(
+        width: 130,
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.green.withOpacity(0.4), width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(symbol.split(':').last,
+                style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12)),
+            Text(regime.toUpperCase(),
+                style: const TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('${conf.toStringAsFixed(0)}%',
                     style: const TextStyle(
-                        color: AppColors.textMuted, fontSize: 9)),
-            ],
-          ),
-        ],
+                        color: AppColors.green,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+                if (rsi != null)
+                  Text('RSI ${rsi.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                          color: AppColors.textMuted, fontSize: 9)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

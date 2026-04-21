@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router-dom';
 import { 
   TrendingUp, 
   Search, 
@@ -25,6 +26,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 
 const Signals: React.FC = () => {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'All' | 'Equity' | 'Crypto' | 'Forex'>('All');
@@ -36,6 +38,18 @@ const Signals: React.FC = () => {
     queryKey: queryKeys.assets,
     queryFn: () => getAssets(),
   });
+
+  // Auto-select asset when navigated from dashboard with a symbol
+  // location.key changes on every navigation even to the same route
+  useEffect(() => {
+    const symbol = (location.state as { symbol?: string } | null)?.symbol;
+    if (!symbol || !assetsData?.assets) return;
+    const asset = assetsData.assets.find((a: Asset) => a.symbol === symbol);
+    if (asset) {
+      setSelectedAsset(asset);
+      setExplanation(null);
+    }
+  }, [location.key, assetsData]);
 
   // Fetch latest signal for selected asset
   const { 
