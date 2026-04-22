@@ -32,7 +32,7 @@ TICKER_KEYWORDS: dict[str, list[str]] = {
     'TCS':        ['tcs', 'tata consultancy'],
     'HDFCBANK':   ['hdfc bank'],
     'INFY':       ['infosys', 'infy'],
-    'ICICIBANK':  ['icici bank', 'icici'],
+    'ICICIBANK':  ['icici bank', 'icici prudential', 'icici lombard'],
     'SBIN':       ['sbi', 'state bank'],
     'BHARTIARTL': ['airtel', 'bharti'],
     'KOTAKBANK':  ['kotak'],

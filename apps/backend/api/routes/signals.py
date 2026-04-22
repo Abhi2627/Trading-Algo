@@ -98,13 +98,33 @@ async def top_picks(
         .where(Signal.confidence >= min_confidence)
         .where(Signal.action == SignalAction.buy)
         .order_by(desc(Signal.ensemble_score))
-        .limit(min(limit, 20))
+        .limit(50)  # fetch more to allow dedup
     )
     rows = result.all()
 
+    # Deduplicate: same stock on NSE and BSE — keep NSE, drop BSE duplicate
+    seen_tickers: set[str] = set()
+    deduped = []
+    # First pass: NSE symbols
+    for s, a in rows:
+        ticker = a.symbol.split(':')[-1]
+        if a.symbol.startswith('NSE:') and ticker not in seen_tickers:
+            seen_tickers.add(ticker)
+            deduped.append((s, a))
+    # Second pass: BSE symbols not already covered by NSE
+    for s, a in rows:
+        ticker = a.symbol.split(':')[-1]
+        if a.symbol.startswith('BSE:') and ticker not in seen_tickers:
+            seen_tickers.add(ticker)
+            deduped.append((s, a))
+
+    # Sort by ensemble score and apply limit
+    deduped.sort(key=lambda x: x[0].ensemble_score, reverse=True)
+    deduped = deduped[:min(limit, 20)]
+
     return {
         "date":  date.today().isoformat(),
-        "count": len(rows),
+        "count": len(deduped),
         "picks": [
             {
                 "signal_id":     str(s.id),
@@ -118,7 +138,7 @@ async def top_picks(
                 "rsi":           (s.technical_indicators or {}).get("rsi_14"),
                 "created_at":    s.created_at.isoformat(),
             }
-            for s, a in rows
+            for s, a in deduped
         ],
     }
 

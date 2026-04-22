@@ -63,9 +63,9 @@ async def generate_signal(
         rl_output          = rl_agent.predict(latest_features, portfolio_state or {})
         transformer_output = forecaster.predict(features_history)
 
-        # Auto-fetch headlines if none supplied
-        # This is the key change: sentiment now always has real data
-        if headlines is None:
+        # Auto-fetch headlines if none supplied or empty
+        # Treat [] same as None — the API sends [] by default
+        if not headlines:
             headlines = await get_headlines_for_symbol(symbol)
             if headlines:
                 logger.debug(f"{symbol}: auto-fetched {len(headlines)} headlines")
