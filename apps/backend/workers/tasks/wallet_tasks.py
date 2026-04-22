@@ -17,8 +17,12 @@ logger = logging.getLogger(__name__)
 def check_stop_losses():
     """
     Check all open trades against current prices.
-    Trigger stop-loss or take-profit close if levels are breached.
-    Runs every 15 min during market hours Mon–Fri.
+    - Fixed stop-loss at -5% from entry (protects against big losses)
+    - Trailing stop activates once trade is +7% in profit
+      Trail sits 6% below the highest price seen since entry
+      This locks in profits as price rises
+    - Take-profit at +20% (let winners run further than original +9%)
+    Runs every 15 min during market hours Mon-Fri.
     """
     return run_async(_check_stop_losses_async())
 
@@ -30,7 +34,13 @@ async def _check_stop_losses_async() -> dict:
     from services.market_data.fetcher import fetch_latest_price
     from services.wallet.wallet_service import get_wallet_service
 
-    stopped = took_profit = 0
+    # Trailing stop parameters
+    TRAIL_ACTIVATE_PCT = 0.07   # trailing stop activates once up 7%
+    TRAIL_PCT          = 0.06   # trail sits 6% below peak price
+    TAKE_PROFIT_PCT    = 0.20   # hard take-profit at +20%
+    STOP_LOSS_PCT      = 0.05   # hard stop-loss at -5% from entry
+
+    stopped = took_profit = trailing_stopped = 0
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -47,11 +57,53 @@ async def _check_stop_losses_async() -> dict:
             if price is None:
                 continue
 
+            entry      = trade.entry_price
+            gain_pct   = (price - entry) / entry
+
+            # Update peak price stored in trade notes
+            # We store peak as "peak:XXXX.XX" in notes field
+            peak_price = entry
+            if trade.notes and 'peak:' in trade.notes:
+                try:
+                    peak_price = float(trade.notes.split('peak:')[1].split()[0])
+                except Exception:
+                    peak_price = entry
+
+            if price > peak_price:
+                peak_price = price
+                # Update notes with new peak
+                existing_note = trade.notes or ''
+                if 'peak:' in existing_note:
+                    parts = existing_note.split('peak:')
+                    rest  = parts[1].split(None, 1)
+                    existing_note = parts[0] + f'peak:{peak_price:.2f}' + (' ' + rest[1] if len(rest) > 1 else '')
+                else:
+                    existing_note = (existing_note + f' peak:{peak_price:.2f}').strip()
+                trade.notes = existing_note
+
+            # Determine exit reason
             reason = None
-            if price <= trade.stop_loss:
-                reason = "stop_loss_triggered"
-            elif price >= trade.take_profit:
-                reason = "take_profit_triggered"
+
+            # 1. Hard stop-loss — always active
+            hard_stop = entry * (1 - STOP_LOSS_PCT)
+            if price <= hard_stop:
+                reason = 'stop_loss_triggered'
+
+            # 2. Trailing stop — activates once gain >= TRAIL_ACTIVATE_PCT
+            elif gain_pct >= TRAIL_ACTIVATE_PCT:
+                trailing_stop = peak_price * (1 - TRAIL_PCT)
+                if price <= trailing_stop:
+                    reason = 'trailing_stop_triggered'
+                    logger.info(
+                        f"Trailing stop: {asset.symbol} "
+                        f"entry=₹{entry} peak=₹{peak_price:.2f} "
+                        f"trail=₹{trailing_stop:.2f} current=₹{price}"
+                    )
+
+            # 3. Hard take-profit at +20%
+            hard_tp = entry * (1 + TAKE_PROFIT_PCT)
+            if price >= hard_tp:
+                reason = 'take_profit_triggered'
 
             if reason:
                 close_result = await wallet_svc.close_trade(
@@ -59,21 +111,31 @@ async def _check_stop_losses_async() -> dict:
                     trade_id=str(trade.id),
                     reason=reason,
                 )
-                if "error" not in close_result:
-                    if reason == "stop_loss_triggered":
+                if 'error' not in close_result:
+                    if reason == 'stop_loss_triggered':
                         stopped += 1
+                    elif reason == 'trailing_stop_triggered':
+                        trailing_stopped += 1
                     else:
                         took_profit += 1
                     logger.info(
                         f"{reason}: {asset.symbol} "
-                        f"price=₹{price} pnl=₹{close_result.get('realized_pnl', 0):+.2f}"
+                        f"price=₹{price:.2f} "
+                        f"pnl=₹{close_result.get('realized_pnl', 0):+.2f}"
                     )
 
-        if stopped + took_profit > 0:
+        if stopped + took_profit + trailing_stopped > 0:
             await db.commit()
 
-    logger.info(f"Stop-loss check: stopped={stopped} took_profit={took_profit}")
-    return {"stopped": stopped, "took_profit": took_profit}
+    logger.info(
+        f"Stop-loss check: "
+        f"stopped={stopped} trailing_stopped={trailing_stopped} took_profit={took_profit}"
+    )
+    return {
+        'stopped':          stopped,
+        'trailing_stopped': trailing_stopped,
+        'took_profit':      took_profit,
+    }
 
 
 @celery_app.task(name="workers.tasks.wallet_tasks.force_close_intraday")

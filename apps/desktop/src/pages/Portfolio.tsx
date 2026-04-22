@@ -137,6 +137,11 @@ const Portfolio: React.FC = () => {
                       <td className="px-6 py-4 text-right font-mono text-xs">
                         <div className="text-red/80">SL: {formatINR(pos.stop_loss)}</div>
                         <div className="text-green/80">TP: {formatINR(pos.take_profit)}</div>
+                        {pos.pnl_pct >= 7 && (
+                          <div className="text-amber/80 text-[10px] mt-0.5">
+                            Trail: {formatINR(pos.current_price * 0.94)}
+                          </div>
+                        )}
                       </td>
                       <td className={`px-6 py-4 text-right font-bold font-mono ${pos.unrealised_pnl >= 0 ? 'text-green' : 'text-red'}`}>
                         <div>{pos.unrealised_pnl >= 0 ? '+' : ''}{formatINR(pos.unrealised_pnl)}</div>
