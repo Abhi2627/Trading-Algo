@@ -28,6 +28,11 @@ class CloseTradeRequest(BaseModel):
     reason:   str = "manual"
 
 
+class WithdrawRequest(BaseModel):
+    amount: float
+    reason: str = "personal withdrawal"
+
+
 @router.get("/summary")
 async def wallet_summary(
     db: AsyncSession = Depends(get_db),
@@ -79,6 +84,49 @@ async def apply_topup(
 ):
     """Manually trigger monthly top-up (normally called by Celery beat)."""
     return await get_wallet_service().apply_monthly_topup(db)
+
+
+@router.post("/withdraw")
+async def withdraw(
+    request: WithdrawRequest,
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Withdraw cash from wallet (simulate transferring to bank).
+    System recalibrates capital tier and position limits automatically.
+    Cannot withdraw below zero or below value of open positions.
+    """
+    return await get_wallet_service().withdraw(db, request.amount, request.reason)
+
+
+@router.get("/capital-tier")
+async def capital_tier(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """Return current capital tier and what it means for trading strategy."""
+    from services.wallet.risk_manager import get_capital_tier
+    wallet  = await get_wallet_service().get_or_create(db)
+    summary = await get_wallet_service().get_summary(db)
+    tier    = get_capital_tier(summary['total_equity'])
+    return {
+        "total_equity":  summary['total_equity'],
+        "cash_balance":  summary['cash_balance'],
+        "tier":          tier['tier'],
+        "tier_label":    tier['label'],
+        "description":   tier['description'],
+        "max_positions": tier['max_positions'],
+        "position_pct":  tier['position_pct'],
+        "max_stock_price": tier['max_stock_price'],
+        "etf_recommended": tier['etf_only'],
+        "advice": (
+            f"At ₹{summary['total_equity']:,.0f} you are in Tier {tier['tier']} ({tier['label']}). "
+            f"{tier['description']}. "
+            + ("Consider Nifty BeES (₹~240/unit) for affordable diversification. " if tier['etf_only'] else "")
+            + f"Max position size: ₹{summary['total_equity'] * tier['position_pct']:,.0f} per trade."
+        )
+    }
 
 
 @router.get("/history")

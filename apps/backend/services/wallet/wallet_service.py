@@ -285,11 +285,73 @@ class WalletService:
             type=TransactionType.topup,
             amount=amount,
             balance_after=wallet.cash_balance,
-            description=f"Monthly top-up: ₹{amount}",
+            description=f"Monthly top-up: \u20b9{amount}",
         ))
         await db.flush()
-        logger.info(f"Monthly top-up applied: ₹{amount}")
+        logger.info(f"Monthly top-up applied: \u20b9{amount}")
         return {"topup_applied": amount, "new_cash_balance": round(wallet.cash_balance, 2)}
+
+    async def withdraw(self, db: AsyncSession, amount: float, reason: str = "withdrawal") -> dict:
+        """
+        Withdraw cash from wallet — simulates transferring money to bank.
+        System automatically recalibrates to the new capital tier.
+        Rules:
+          - Cannot withdraw more than available cash balance
+          - Cannot withdraw if it leaves less than \u20b9500 (minimum buffer)
+          - Open positions are NOT affected — user must close them manually
+        """
+        from services.wallet.risk_manager import get_capital_tier
+
+        wallet = await self.get_or_create(db)
+
+        if amount <= 0:
+            return {"error": "Withdrawal amount must be positive"}
+
+        if amount > wallet.cash_balance:
+            return {
+                "error": f"Insufficient cash. Available: \u20b9{wallet.cash_balance:.2f}, Requested: \u20b9{amount:.2f}",
+                "available_cash": round(wallet.cash_balance, 2),
+            }
+
+        remaining = wallet.cash_balance - amount
+        if remaining < 500:
+            max_withdraw = wallet.cash_balance - 500
+            return {
+                "error": f"Cannot withdraw \u20b9{amount:.2f} — must keep \u20b9500 minimum buffer",
+                "max_withdrawable": round(max(max_withdraw, 0), 2),
+            }
+
+        # Execute withdrawal
+        wallet.cash_balance -= amount
+        new_equity = wallet.cash_balance + wallet.invested_balance
+        new_tier   = get_capital_tier(new_equity)
+
+        db.add(WalletTransaction(
+            wallet_id=wallet.id,
+            type=TransactionType.topup,   # reuse topup type with negative amount
+            amount=-amount,
+            balance_after=wallet.cash_balance,
+            description=f"Withdrawal: \u20b9{amount} ({reason})",
+        ))
+        await db.flush()
+
+        logger.info(f"Withdrawal: \u20b9{amount} | New balance: \u20b9{wallet.cash_balance:.2f} | Tier: {new_tier['tier']}")
+
+        return {
+            "withdrawn":        round(amount, 2),
+            "new_cash_balance": round(wallet.cash_balance, 2),
+            "new_total_equity": round(new_equity, 2),
+            "new_tier":         new_tier['tier'],
+            "new_tier_label":   new_tier['label'],
+            "new_max_positions":new_tier['max_positions'],
+            "new_position_size":round(new_equity * new_tier['position_pct'], 2),
+            "message": (
+                f"\u20b9{amount:.0f} withdrawn. You are now in Tier {new_tier['tier']} ({new_tier['label']}). "
+                f"{new_tier['description']}. "
+                + (f"With \u20b9{new_equity:.0f} remaining, consider Nifty BeES (\u20b9~240/unit). "
+                   if new_tier['etf_only'] else "")
+            ),
+        }
 
     # ------------------------------------------------------------------ #
     # Internal helpers
