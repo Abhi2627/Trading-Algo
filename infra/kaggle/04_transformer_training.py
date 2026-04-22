@@ -1,173 +1,150 @@
-# =============================================================================
-# 04_transformer_training.py — FIXED VERSION
-# No meta.json dependency — builds everything from .npy files directly
-# =============================================================================
-
-# ── Cell 1: Setup ─────────────────────────────────────────────────────────────
-import numpy as np
-import pandas as pd
+import os
+import glob
 import json
 import pickle
-import os
-from pathlib import Path
-from typing import Tuple
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from pathlib import Path
 from sklearn.preprocessing import StandardScaler
+import math
 
-OUTPUT_DIR = Path("/kaggle/working")
+# --- Setup and Environment ---
+input_base = Path("/kaggle/input")
+meta_files = list(input_base.rglob("meta.json"))
+
+if not meta_files:
+    raise FileNotFoundError("Could not find meta.json.")
+
+FEATURES_DIR = meta_files[0].parent
+OUTPUT_DIR   = Path("/kaggle/working")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
-# Auto-detect features directory
-FEATURES_DIR = None
-for root, dirs, files in os.walk("/kaggle/input"):
-    if any(f.endswith("_features.npy") for f in files):
-        FEATURES_DIR = Path(root)
-        break
+with open(FEATURES_DIR / "meta.json") as f:
+    META = json.load(f)
 
-assert FEATURES_DIR is not None, "Cannot find _features.npy files"
-npy_files = sorted(FEATURES_DIR.glob("*_features.npy"))
-print(f"Found {len(npy_files)} symbol files in {FEATURES_DIR}")
+FEATURE_COLS = list(META.values())[0]["columns"]
+CLOSE_IDX    = FEATURE_COLS.index("close")
+N_FEATURES   = len(FEATURE_COLS)
 
-# Get feature count from sample
-sample = np.load(npy_files[0]).astype(np.float32)
-N_FEATURES = sample.shape[1]
-print(f"Sample shape: {sample.shape}")
+SEQ_LEN     = 60
+PRED_DAYS   = [1, 3, 5]
+BATCH_SIZE  = 128
+EPOCHS      = 50
+LR          = 1e-4
 
-# Feature columns in exact order from 02_feature_engineering.py
-FEATURE_COLS = [
-    "close",
-    "return_1d", "return_3d", "return_5d", "return_10d", "return_20d",
-    "log_return_1d", "log_return_5d",
-    "volatility_5d", "volatility_10d", "volatility_20d",
-    "atr_14", "atr_pct",
-    "price_position_52w", "price_position_20d", "gap_pct",
-    "ema_9", "ema_21", "ema_50", "ema_200",
-    "close_vs_ema9", "close_vs_ema21", "close_vs_ema50", "close_vs_ema200",
-    "ema9_above_ema21", "ema21_above_ema50", "ema50_above_ema200",
-    "macd_line", "macd_signal", "macd_histogram", "macd_above_signal",
-    "adx",
-    "rsi_14", "rsi_7", "rsi_overbought", "rsi_oversold",
-    "stoch_k", "stoch_d", "williams_r",
-    "bb_upper", "bb_mid", "bb_lower", "bb_width", "bb_position",
-    "volume_ma_20", "volume_ratio", "volume_spike",
-    "obv", "obv_ma_20", "obv_above_ma", "vwap_deviation",
-    "is_trending", "is_high_volatility",
-]
+print(f"Features: {N_FEATURES}, Close index: {CLOSE_IDX}")
 
-if N_FEATURES != len(FEATURE_COLS):
-    print(f"WARNING: expected {len(FEATURE_COLS)} cols, got {N_FEATURES}. Using generic names.")
-    FEATURE_COLS = [f"f_{i}" for i in range(N_FEATURES)]
+# --- 1. Load Data ---
+npy_files = glob.glob(str(FEATURES_DIR / "*_features.npy"))
 
-CLOSE_IDX = FEATURE_COLS.index("close") if "close" in FEATURE_COLS else 0
-SYMBOLS   = [f.stem.replace("_features", "") for f in npy_files]
-
-print(f"N_FEATURES: {N_FEATURES}, CLOSE_IDX: {CLOSE_IDX}")
-print(f"Symbols ({len(SYMBOLS)}): {SYMBOLS[:5]}...")
-
-# Hyperparameters
-SEQ_LEN    = 60
-PRED_DAYS  = [1, 3, 5]
-BATCH_SIZE = 128
-EPOCHS     = 50
-LR         = 1e-4
-TRAIN_SPLIT = 0.80   # 80/20 split
-
-
-# ── Cell 2: Dataset ───────────────────────────────────────────────────────────
-class PriceSequenceDataset(Dataset):
-    def __init__(self, features: np.ndarray, scaler=None, fit_scaler=False):
-        self.features = features.astype(np.float32)
-        max_horizon   = max(PRED_DAYS)
-
-        if fit_scaler:
-            self.scaler   = StandardScaler()
-            self.features = self.scaler.fit_transform(self.features)
-        elif scaler is not None:
-            self.scaler   = scaler
-            self.features = self.scaler.transform(self.features)
-        else:
-            self.scaler = None
-
-        self.X, self.y = [], []
-        for i in range(SEQ_LEN, len(self.features) - max_horizon):
-            seq   = self.features[i - SEQ_LEN:i]
-            close = self.features[i - 1, CLOSE_IDX]
-            targets = []
-            for d in PRED_DAYS:
-                future = self.features[i + d - 1, CLOSE_IDX]
-                targets.append((future - close) / (abs(close) + 1e-9))
-            self.X.append(seq)
-            self.y.append(targets)
-
-        self.X = np.array(self.X, dtype=np.float32)
-        self.y = np.array(self.y, dtype=np.float32)
-        print(f"  Dataset: {len(self.X)} sequences")
-
-    def __len__(self):         return len(self.X)
-    def __getitem__(self, i):  return self.X[i], self.y[i]
-
-
-# ── Cell 3: Model ─────────────────────────────────────────────────────────────
-class PriceForecaster(nn.Module):
-    def __init__(self, n_features=N_FEATURES, d_model=128, n_heads=8,
-                 n_layers=4, d_ff=512, dropout=0.1, n_outputs=len(PRED_DAYS)):
-        super().__init__()
-        self.input_proj = nn.Linear(n_features, d_model)
-        self.pos_enc    = nn.Embedding(SEQ_LEN, d_model)
-        encoder_layer   = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
-            dropout=dropout, batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.head = nn.Sequential(
-            nn.Linear(d_model, 64), nn.ReLU(),
-            nn.Dropout(dropout), nn.Linear(64, n_outputs))
-
-    def forward(self, x):
-        b, s, _ = x.shape
-        x = self.input_proj(x)
-        pos = torch.arange(s, device=x.device).unsqueeze(0)
-        x = x + self.pos_enc(pos)
-        x = self.transformer(x)
-        x = x.mean(dim=1)
-        return self.head(x)
-
-
-# ── Cell 4: Load data ─────────────────────────────────────────────────────────
-all_train, all_val = [], []
-
+all_arrays = []
 for f in npy_files:
     arr = np.load(f).astype(np.float32)
-    split_idx = int(len(arr) * TRAIN_SPLIT)
-    if split_idx < SEQ_LEN + max(PRED_DAYS) + 10:
-        print(f"SKIP {f.stem}: too few rows ({len(arr)})")
-        continue
-    all_train.append(arr[:split_idx])
-    all_val.append(arr[split_idx:])
-    print(f"Loaded {f.stem}: train={split_idx} val={len(arr)-split_idx}")
+    if len(arr) >= SEQ_LEN + max(PRED_DAYS) + 10:
+        all_arrays.append(arr)
+        print(f"Loaded {Path(f).stem}: {len(arr)} rows")
+    else:
+        print(f"SKIP {Path(f).stem}: only {len(arr)} rows")
 
-train_data = np.concatenate(all_train, axis=0)
-val_data   = np.concatenate(all_val,   axis=0)
-print(f"\nTotal train: {train_data.shape}, val: {val_data.shape}")
+assert len(all_arrays) > 0, "No valid data loaded."
 
-train_ds = PriceSequenceDataset(train_data, fit_scaler=True)
-val_ds   = PriceSequenceDataset(val_data,   scaler=train_ds.scaler)
+# Concatenate all, then split 80/20
+all_data_stacked  = np.concatenate(all_arrays, axis=0)
+split_idx = int(len(all_data_stacked) * 0.80)
+train_data = all_data_stacked[:split_idx]
+val_data   = all_data_stacked[split_idx:]
+
+print(f"\nTotal shape: {all_data_stacked.shape}")
+print(f"Train shape: {train_data.shape}")
+print(f"Val shape:   {val_data.shape}")
+
+# --- 2. Scale Data ---
+scaler = StandardScaler()
+
+# Scale everything EXCEPT the close price (we need it raw for percentage returns)
+cols_to_scale = [i for i in range(N_FEATURES) if i != CLOSE_IDX]
+scaler.fit(train_data[:, cols_to_scale]) # Fit only on training data
 
 with open(OUTPUT_DIR / "transformer_scaler.pkl", "wb") as f:
-    pickle.dump(train_ds.scaler, f)
+    pickle.dump(scaler, f)
 print("Scaler saved.")
 
-train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
-                      num_workers=2, pin_memory=True)
-val_dl   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False,
-                      num_workers=2, pin_memory=True)
-print(f"Train batches: {len(train_dl)}, Val batches: {len(val_dl)}")
+# --- 3. Dataset Class ---
+class TradingDataset(Dataset):
+    def __init__(self, data, seq_len, pred_days, close_idx, scaler, cols_to_scale):
+        self.X = []
+        self.y = []
+        
+        # Apply scaling to the features
+        data_scaled = data.copy()
+        data_scaled[:, cols_to_scale] = scaler.transform(data[:, cols_to_scale])
+        
+        for i in range(len(data) - seq_len - max(pred_days)):
+            self.X.append(data_scaled[i : i + seq_len])
+            
+            # Calculate y using RAW close prices
+            current_close = data[i + seq_len - 1, close_idx]
+            future_closes = [data[i + seq_len - 1 + d, close_idx] for d in pred_days]
+            returns = [(fc - current_close) / (abs(current_close) + 1e-9) for fc in future_closes]
+            self.y.append(returns)
+                
+        self.X = np.array(self.X, dtype=np.float32)
+        self.y = np.array(self.y, dtype=np.float32)
+
+    def __len__(self): return len(self.X)
+    def __getitem__(self, idx): return torch.tensor(self.X[idx]), torch.tensor(self.y[idx])
+
+# --- 4. Prepare Loaders ---
+train_dataset = TradingDataset(train_data, SEQ_LEN, PRED_DAYS, CLOSE_IDX, scaler, cols_to_scale)
+val_dataset   = TradingDataset(val_data, SEQ_LEN, PRED_DAYS, CLOSE_IDX, scaler, cols_to_scale)
+
+use_pinned_memory = torch.cuda.is_available()
+train_dl = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=use_pinned_memory, num_workers=2)
+val_dl   = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=use_pinned_memory, num_workers=2)
+
+print(f"train_ds size: {len(train_dataset)}")
+print(f"val_ds size:   {len(val_dataset)}")
+print(f"train_dl batches: {len(train_dl)}")
+print(f"val_dl batches:   {len(val_dl)}")
+
+# Verify dataloaders before starting
+assert len(train_dl) > 0, f"Empty train_dl! train_ds has {len(train_dataset)} samples"
+assert len(val_dl)   > 0, f"Empty val_dl! val_ds has {len(val_dataset)} samples"
 
 
-# ── Cell 5: Train ─────────────────────────────────────────────────────────────
+# --- 5. Model Definition ---
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+class PriceForecaster(nn.Module):
+    def __init__(self, d_model=128, n_heads=8, n_layers=4):
+        super().__init__()
+        self.embedding = nn.Linear(N_FEATURES, d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.fc = nn.Linear(d_model, len(PRED_DAYS))
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = self.pos_encoder(x)
+        x = self.transformer(x)
+        return self.fc(x[:, -1, :])
+
+# --- 6. Training Loop ---
 model     = PriceForecaster().to(DEVICE)
 optimiser = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=EPOCHS)
@@ -177,33 +154,44 @@ best_val_loss    = float("inf")
 patience_counter = 0
 PATIENCE         = 8
 
+print(f"\nStarting training on {DEVICE}...")
+
 for epoch in range(1, EPOCHS + 1):
     model.train()
     train_loss = 0.0
     for X_b, y_b in train_dl:
         X_b, y_b = X_b.to(DEVICE), y_b.to(DEVICE)
         optimiser.zero_grad()
-        loss = criterion(model(X_b), y_b)
+        
+        preds = model(X_b)
+        if torch.isnan(preds).any():
+            continue 
+            
+        loss = criterion(preds, y_b)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimiser.step()
         train_loss += loss.item()
+        
     train_loss /= len(train_dl)
 
     model.eval()
     val_loss = 0.0
+    n_val_batches = 0
     with torch.no_grad():
         for X_b, y_b in val_dl:
-            val_loss += criterion(model(X_b.to(DEVICE)),
-                                  y_b.to(DEVICE)).item()
-    val_loss /= len(val_dl)
+            val_loss += criterion(model(X_b.to(DEVICE)), y_b.to(DEVICE)).item()
+            n_val_batches += 1
+            
+    if n_val_batches == 0:
+        raise RuntimeError("val_dl is empty — check val_data shape and PriceSequenceDataset")
+        
+    val_loss /= n_val_batches
     scheduler.step()
 
-    print(f"Epoch {epoch:3d}/{EPOCHS}  "
-          f"train={train_loss:.6f}  val={val_loss:.6f}  "
-          f"lr={scheduler.get_last_lr()[0]:.2e}")
+    print(f"Epoch {epoch:3d}/{EPOCHS}  train={train_loss:.6f}  val={val_loss:.6f}")
 
-    if val_loss < best_val_loss:
+    if not math.isnan(val_loss) and val_loss < best_val_loss:
         best_val_loss    = val_loss
         patience_counter = 0
         torch.save({
@@ -218,7 +206,7 @@ for epoch in range(1, EPOCHS + 1):
             "n_heads":      8,
             "n_layers":     4,
         }, OUTPUT_DIR / "transformer.pth")
-        print(f"          ✓ Best saved (val={best_val_loss:.6f})")
+        print(f"         ✓ Best saved (val={best_val_loss:.6f})")
     else:
         patience_counter += 1
         if patience_counter >= PATIENCE:
@@ -227,28 +215,25 @@ for epoch in range(1, EPOCHS + 1):
 
 print(f"\nDone. Best val loss: {best_val_loss:.6f}")
 
-
-# ── Cell 6: Directional accuracy ──────────────────────────────────────────────
-ckpt       = torch.load(OUTPUT_DIR / "transformer.pth", map_location=DEVICE)
-best_model = PriceForecaster().to(DEVICE)
-best_model.load_state_dict(ckpt["model_state"])
+# --- 7. Evaluation ---
+print("\nEvaluating best model...")
+checkpoint = torch.load(OUTPUT_DIR / "transformer.pth", map_location=DEVICE)
+best_model  = PriceForecaster().to(DEVICE)
+best_model.load_state_dict(checkpoint["model_state"])
 best_model.eval()
 
 all_preds, all_targets = [], []
 with torch.no_grad():
-    for X_b, y_b in val_dl:
-        all_preds.append(best_model(X_b.to(DEVICE)).cpu().numpy())
-        all_targets.append(y_b.numpy())
+    for X_batch, y_batch in val_dl:
+        preds = best_model(X_batch.to(DEVICE)).cpu().numpy()
+        all_preds.append(preds)
+        all_targets.append(y_batch.numpy())
 
-all_preds   = np.concatenate(all_preds)
-all_targets = np.concatenate(all_targets)
+all_preds   = np.concatenate(all_preds,   axis=0)
+all_targets = np.concatenate(all_targets, axis=0)
 
-print("\nDirectional accuracy (>52% = has predictive edge):")
 for i, d in enumerate(PRED_DAYS):
-    acc = (np.sign(all_preds[:, i]) == np.sign(all_targets[:, i])).mean()
-    print(f"  {d}-day: {acc:.1%}")
-
-print("\nOutput files:")
-print("  transformer.pth")
-print("  transformer_scaler.pkl")
-print("\nDownload and place in apps/backend/data/trained_models/")
+    pred_dir   = np.sign(all_preds[:, i])
+    actual_dir = np.sign(all_targets[:, i])
+    accuracy   = (pred_dir == actual_dir).mean()
+    print(f"{d}-day directional accuracy: {accuracy:.1%}")

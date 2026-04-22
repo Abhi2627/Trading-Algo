@@ -87,37 +87,43 @@ class PriceForecaster:
             self.is_ready = False
 
     def _build_model(self, n_features, d_model, n_heads, n_layers, seq_len, n_outputs):
-        """Reconstruct the exact same architecture used during training."""
+        """Reconstruct architecture matching the Kaggle notebook 04 training code."""
         import torch.nn as nn
+        import math
+
+        class PositionalEncoding(nn.Module):
+            def __init__(self, d_model, max_len=5000):
+                super().__init__()
+                pe       = torch.zeros(max_len, d_model)
+                position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+                div_term = torch.exp(
+                    torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+                )
+                pe[:, 0::2] = torch.sin(position * div_term)
+                pe[:, 1::2] = torch.cos(position * div_term)
+                self.register_buffer('pe', pe.unsqueeze(0))
+
+            def forward(self, x):
+                return x + self.pe[:, :x.size(1)]
 
         class PriceForecasterNet(nn.Module):
             def __init__(self):
                 super().__init__()
-                self.input_proj = nn.Linear(n_features, d_model)
-                self.pos_enc    = nn.Embedding(seq_len, d_model)
-                encoder_layer   = nn.TransformerEncoderLayer(
-                    d_model=d_model, nhead=n_heads,
-                    dim_feedforward=d_model * 4,
-                    dropout=0.1, batch_first=True,
+                self.embedding   = nn.Linear(n_features, d_model)
+                self.pos_encoder = PositionalEncoding(d_model)
+                encoder_layer    = nn.TransformerEncoderLayer(
+                    d_model=d_model, nhead=n_heads, batch_first=True
                 )
                 self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-                self.head = nn.Sequential(
-                    nn.Linear(d_model, 64),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(64, n_outputs),
-                )
+                self.fc          = nn.Linear(d_model, n_outputs)
 
             def forward(self, x):
-                b, s, _ = x.shape
-                import torch
-                x = self.input_proj(x)
-                pos = torch.arange(s, device=x.device).unsqueeze(0)
-                x = x + self.pos_enc(pos)
+                x = self.embedding(x)
+                x = self.pos_encoder(x)
                 x = self.transformer(x)
-                x = x.mean(dim=1)
-                return self.head(x)
+                return self.fc(x[:, -1, :])  # use last token, not mean pooling
 
+        import torch
         return PriceForecasterNet()
 
     def predict(self, features_history: list[dict]) -> dict:
@@ -147,31 +153,31 @@ class PriceForecaster:
         try:
             import torch
 
-            # Take last SEQ_LEN entries and build numpy array
             recent = features_history[-SEQ_LEN:]
             arr = np.array(
                 [[row.get(col, 0.0) for col in self._feature_cols] for row in recent],
                 dtype=np.float32,
             )  # (SEQ_LEN, n_features)
 
-            # Apply same scaler used during training
-            arr_scaled = self._scaler.transform(arr)  # (SEQ_LEN, n_features)
+            # New scaler only scales non-close columns (matches training)
+            close_idx  = self._feature_cols.index('close') if 'close' in self._feature_cols else 0
+            cols_to_scale = [i for i in range(len(self._feature_cols)) if i != close_idx]
+            arr_scaled = arr.copy()
+            arr_scaled[:, cols_to_scale] = self._scaler.transform(arr[:, cols_to_scale])
 
-            # Run inference
             x = torch.tensor(arr_scaled).unsqueeze(0)  # (1, SEQ_LEN, n_features)
             with torch.no_grad():
-                preds = self._model(x).numpy()[0]       # (3,) → [delta_1d, delta_3d, delta_5d]
+                preds = self._model(x).numpy()[0]  # (3,)
 
-            delta_1d, delta_3d, delta_5d = float(preds[0]), float(preds[1]), float(preds[2])
+            delta_1d = float(preds[0])
+            delta_3d = float(preds[1])
+            delta_5d = float(preds[2])
 
-            # Confidence: magnitude of 1-day prediction relative to typical moves
-            # Capped at 1.0 — larger predicted moves = higher confidence
-            confidence = min(abs(delta_1d) / 0.02, 1.0)  # 2% move = full confidence
+            confidence = min(abs(delta_1d) / 0.02, 1.0)
 
-            # Direction classification
-            if delta_1d > 0.003:     direction = "up"
-            elif delta_1d < -0.003:  direction = "down"
-            else:                    direction = "sideways"
+            if delta_1d > 0.003:    direction = "up"
+            elif delta_1d < -0.003: direction = "down"
+            else:                   direction = "sideways"
 
             return {
                 "delta_1d":   round(delta_1d,  6),
