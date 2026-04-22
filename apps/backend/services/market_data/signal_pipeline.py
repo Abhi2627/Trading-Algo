@@ -8,6 +8,7 @@ from sqlalchemy import select
 from core.models import Asset, Signal, SignalAction, Trade, TradeStatus
 from services.market_data.fetcher import fetch_historical
 from services.market_data.features import get_latest_features, detect_market_regime, compute_features
+from services.market_data.fundamentals import get_fscore
 from services.news.news_fetcher import get_headlines_for_symbol
 from models.rl.agent import get_rl_agent
 from models.transformer.forecaster import get_forecaster
@@ -25,36 +26,77 @@ async def generate_signal(
 ) -> Optional[dict]:
     """
     Full signal pipeline for one symbol.
-    Fetch -> Features -> Models -> Ensemble -> Persist.
+    Fetch -> F-Score filter -> Features -> Models -> Ensemble -> Persist.
     Returns the signal dict or None on failure.
     """
     # 1. Resolve asset
     result = await db.execute(select(Asset).where(Asset.symbol == symbol))
-    asset = result.scalar_one_or_none()
+    asset  = result.scalar_one_or_none()
     if asset is None:
         logger.error(f"Asset not found: {symbol}")
         return None
 
     try:
-        # 2. Fetch OHLCV (5 years for features, need 200+ rows for EMA200)
+        # 2. Piotroski F-Score pre-filter
+        # Run in thread executor to avoid blocking the event loop
+        # (yfinance is synchronous)
+        import asyncio
+        loop     = asyncio.get_event_loop()
+        fscore_result = await loop.run_in_executor(None, get_fscore, symbol)
+
+        if not fscore_result['pass_filter']:
+            logger.info(
+                f"{symbol}: SKIPPED by F-Score filter "
+                f"(score={fscore_result['fscore']}/9, grade={fscore_result['grade']})"
+            )
+            # Still persist a HOLD signal so the scan doesn't leave gaps
+            # but mark it with very low confidence
+            fscore_hold = Signal(
+                asset_id  = asset.id,
+                action    = SignalAction.hold,
+                confidence= 0.0,
+                rl_score  = 0.0,
+                transformer_score = 0.0,
+                sentiment_score   = 0.0,
+                ensemble_score    = 0.0,
+                market_regime     = 'filtered',
+                technical_indicators = {},
+                sentiment_sources    = [],
+                is_intraday          = False,
+            )
+            db.add(fscore_hold)
+            await db.flush()
+            return {
+                'signal_id':    str(fscore_hold.id),
+                'symbol':       symbol,
+                'action':       'hold',
+                'confidence':   0.0,
+                'ensemble_score': 0.0,
+                'market_regime':  'filtered',
+                'fscore':         fscore_result['fscore'],
+                'fscore_grade':   fscore_result['grade'],
+                'audit':          {},
+                'current_price':  0.0,
+                'generated_at':   datetime.now(timezone.utc).isoformat(),
+            }
+
+        # 3. Fetch OHLCV
         df = fetch_historical(symbol, period_days=1825, interval="1d")
         if df is None or len(df) < 60:
             logger.error(f"Insufficient data for {symbol}")
             return None
 
-        # 3. Compute features
+        # 4. Compute features
         features_df = compute_features(df)
         if features_df is None:
             logger.error(f"Feature computation failed for {symbol}")
             return None
 
-        latest_features = features_df.iloc[-1].to_dict()
-        regime = detect_market_regime(df)
-
-        # Build feature history list for Transformer (needs SEQ_LEN=60 dicts)
+        latest_features  = features_df.iloc[-1].to_dict()
+        regime           = detect_market_regime(df)
         features_history = [row.to_dict() for _, row in features_df.tail(60).iterrows()]
 
-        # 4. Run models
+        # 5. Run models
         rl_agent   = get_rl_agent()
         forecaster = get_forecaster()
         sentiment  = get_sentiment_service()
@@ -64,7 +106,6 @@ async def generate_signal(
         transformer_output = forecaster.predict(features_history)
 
         # Auto-fetch headlines if none supplied or empty
-        # Treat [] same as None — the API sends [] by default
         if not headlines:
             headlines = await get_headlines_for_symbol(symbol)
             if headlines:
@@ -72,22 +113,26 @@ async def generate_signal(
 
         sentiment_output = await sentiment.analyse(headlines or [], symbol=symbol)
 
-        # 5. Ensemble
+        # 6. Ensemble
         result_signal = ensemble.combine(
-            rl_output=rl_output,
-            transformer_output=transformer_output,
-            sentiment_output=sentiment_output,
-            market_regime=regime,
+            rl_output          = rl_output,
+            transformer_output = transformer_output,
+            sentiment_output   = sentiment_output,
+            market_regime      = regime,
         )
-        audit = ensemble.audit_record(result_signal, rl_output, transformer_output, sentiment_output)
+        audit = ensemble.audit_record(
+            result_signal, rl_output, transformer_output, sentiment_output
+        )
+
+        # Add F-Score to audit
+        audit['fscore']       = fscore_result['fscore']
+        audit['fscore_grade'] = fscore_result['grade']
 
     except Exception as e:
         logger.exception(f"Signal pipeline crash for {symbol}: {e}")
         return None
 
-    # 6. Position-aware action remapping
-    # If the model says SELL but we hold no position: remap to HOLD (avoid entry)
-    # If the model says BUY  but we already hold:     remap to HOLD (avoid double entry)
+    # 7. Position-aware action remapping
     open_trade_result = await db.execute(
         select(Trade)
         .where(Trade.asset_id == asset.id)
@@ -96,49 +141,52 @@ async def generate_signal(
     )
     has_open_position = open_trade_result.scalar_one_or_none() is not None
 
-    raw_action = result_signal["action"]  # buy | sell | hold
+    raw_action = result_signal["action"]
     if raw_action == "sell" and not has_open_position:
-        result_signal["action"] = "hold"
+        result_signal["action"]        = "hold"
         result_signal["signal_action"] = SignalAction.hold
-        logger.info(f"{symbol}: SELL remapped to HOLD (no open position to close)")
+        logger.info(f"{symbol}: SELL remapped to HOLD (no open position)")
     elif raw_action == "buy" and has_open_position:
-        result_signal["action"] = "hold"
+        result_signal["action"]        = "hold"
         result_signal["signal_action"] = SignalAction.hold
         logger.info(f"{symbol}: BUY remapped to HOLD (position already open)")
 
-    # 6. Persist signal
+    # 8. Persist signal
     signal = Signal(
-        asset_id=asset.id,
-        action=result_signal["signal_action"],
-        confidence=result_signal["confidence"],
-        rl_score=result_signal["rl_score"],
-        transformer_score=result_signal["transformer_score"],
-        sentiment_score=result_signal["sentiment_score"],
-        ensemble_score=result_signal["ensemble_score"],
-        market_regime=regime,
-        technical_indicators={
+        asset_id          = asset.id,
+        action            = result_signal["signal_action"],
+        confidence        = result_signal["confidence"],
+        rl_score          = result_signal["rl_score"],
+        transformer_score = result_signal["transformer_score"],
+        sentiment_score   = result_signal["sentiment_score"],
+        ensemble_score    = result_signal["ensemble_score"],
+        market_regime     = regime,
+        technical_indicators = {
             k: latest_features.get(k)
             for k in ["rsi_14", "macd_line", "adx", "bb_width",
                       "volume_ratio", "atr_pct", "close_vs_ema50"]
         },
-        sentiment_sources=[{"headline": h, "source": "rss"} for h in (headlines or [])],
-        is_intraday=False,
+        sentiment_sources = [{"headline": h, "source": "rss"} for h in (headlines or [])],
+        is_intraday       = False,
     )
     db.add(signal)
-    await db.flush()  # get signal.id without committing
+    await db.flush()
 
     logger.info(
-        f"Signal generated: {symbol} {result_signal['action'].upper()} "
-        f"confidence={result_signal['confidence']:.2f} regime={regime}"
+        f"Signal: {symbol} {result_signal['action'].upper()} "
+        f"conf={result_signal['confidence']:.2f} "
+        f"regime={regime} fscore={fscore_result['fscore']}/9"
     )
 
     return {
-        "signal_id":  str(signal.id),
-        "symbol":     symbol,
-        "action":     result_signal["action"],
-        "confidence": result_signal["confidence"],
+        "signal_id":      str(signal.id),
+        "symbol":         symbol,
+        "action":         result_signal["action"],
+        "confidence":     result_signal["confidence"],
         "ensemble_score": result_signal["ensemble_score"],
         "market_regime":  regime,
+        "fscore":         fscore_result["fscore"],
+        "fscore_grade":   fscore_result["grade"],
         "audit":          audit,
         "current_price":  float(features_df["close"].iloc[-1]),
         "generated_at":   datetime.now(timezone.utc).isoformat(),
@@ -147,10 +195,8 @@ async def generate_signal(
 
 async def get_latest_signal(symbol: str, db: AsyncSession) -> Optional[Signal]:
     """Fetch the most recent signal for a symbol from DB."""
-    result = await db.execute(
-        select(Asset).where(Asset.symbol == symbol)
-    )
-    asset = result.scalar_one_or_none()
+    result = await db.execute(select(Asset).where(Asset.symbol == symbol))
+    asset  = result.scalar_one_or_none()
     if asset is None:
         return None
 
@@ -161,3 +207,4 @@ async def get_latest_signal(symbol: str, db: AsyncSession) -> Optional[Signal]:
         .limit(1)
     )
     return sig_result.scalar_one_or_none()
+
