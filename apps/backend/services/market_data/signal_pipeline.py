@@ -14,6 +14,7 @@ from models.rl.agent import get_rl_agent
 from models.transformer.forecaster import get_forecaster
 from models.sentiment.sentiment_service import get_sentiment_service
 from models.ensemble.ensemble import get_ensemble_engine
+from models.ensemble.meta_agent import get_meta_agent
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ async def generate_signal(
         forecaster = get_forecaster()
         sentiment  = get_sentiment_service()
         ensemble   = get_ensemble_engine()
+        meta_agent = get_meta_agent()
 
         rl_output          = rl_agent.predict(latest_features, portfolio_state or {})
         transformer_output = forecaster.predict(features_history)
@@ -113,12 +115,28 @@ async def generate_signal(
 
         sentiment_output = await sentiment.analyse(headlines or [], symbol=symbol)
 
-        # 6. Ensemble
+        # 6. Meta-Agent decides weights dynamically
+        meta_weights = await meta_agent.decide_weights(
+            market_regime       = regime,
+            rl_confidence       = rl_output.get("confidence", 0.0),
+            rl_action           = rl_output.get("action", "hold"),
+            transformer_conf    = transformer_output.get("confidence", 0.0),
+            transformer_dir     = transformer_output.get("direction", "sideways"),
+            transformer_delta   = transformer_output.get("delta_1d", 0.0),
+            sentiment_score     = sentiment_output.get("score", 0.0),
+            sentiment_magnitude = sentiment_output.get("magnitude", 0.0),
+            sentiment_direction = sentiment_output.get("direction", "neutral"),
+            news_count          = len(headlines or []),
+            symbol              = symbol,
+        )
+
+        # 7. Ensemble with dynamic weights
         result_signal = ensemble.combine(
             rl_output          = rl_output,
             transformer_output = transformer_output,
             sentiment_output   = sentiment_output,
             market_regime      = regime,
+            weights            = meta_weights,
         )
         audit = ensemble.audit_record(
             result_signal, rl_output, transformer_output, sentiment_output

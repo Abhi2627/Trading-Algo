@@ -1,57 +1,24 @@
 # models/ensemble/ensemble.py
-# Combines RL agent + Transformer + Sentiment into one final signal.
-# This is the only file that talks to all three models.
 import logging
 from typing import Optional
 from core.models import SignalAction
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Regime-aware ensemble weights
-# Transformer weight reduced to 0.10 until directional accuracy > 52%
-# Current transformer accuracy: ~49% (below random) — needs more training data
-# Increase transformer weights once retrained on larger dataset
-# ---------------------------------------------------------------------------
-REGIME_WEIGHTS = {
-    "trending": {
-        "rl":          0.70,   # RL carries most weight until transformer improves
-        "transformer": 0.10,
-        "sentiment":   0.20,
-    },
-    "volatile": {
-        "rl":          0.65,
-        "transformer": 0.10,
-        "sentiment":   0.25,
-    },
-    "ranging": {
-        "rl":          0.65,
-        "transformer": 0.10,
-        "sentiment":   0.25,
-    },
-}
-
-# Minimum confidence to emit BUY or SELL
-# Signals below this threshold become HOLD
 MIN_CONFIDENCE_THRESHOLD = 0.35
+
+REGIME_WEIGHTS = {
+    "trending": {"rl": 0.70, "transformer": 0.10, "sentiment": 0.20},
+    "volatile": {"rl": 0.55, "transformer": 0.10, "sentiment": 0.35},
+    "ranging":  {"rl": 0.65, "transformer": 0.10, "sentiment": 0.25},
+}
 
 
 class EnsembleEngine:
     """
-    Combines outputs from all three models into a single actionable signal.
-
-    Each model produces a directional score (-1 to +1).
-    Scores are weighted by market regime and blended.
-    Final score is thresholded into BUY / SELL / HOLD.
-
-    Usage:
-        engine = EnsembleEngine()
-        signal = engine.combine(
-            rl_output=...,
-            transformer_output=...,
-            sentiment_output=...,
-            market_regime="trending",
-        )
+    Combines RL + Transformer + Sentiment into one signal.
+    Weights are decided dynamically by the Meta-Agent (Ollama).
+    Falls back to static regime weights if Meta-Agent unavailable.
     """
 
     def combine(
@@ -60,71 +27,43 @@ class EnsembleEngine:
         transformer_output: dict,
         sentiment_output:   dict,
         market_regime:      str = "ranging",
+        weights:            Optional[dict] = None,
     ) -> dict:
-        """
-        Blend model outputs into a final signal.
+        # Use Meta-Agent weights if provided, else static fallback
+        w = weights or REGIME_WEIGHTS.get(market_regime, REGIME_WEIGHTS["ranging"])
 
-        Args:
-            rl_output:          Output of RLAgent.predict()
-            transformer_output: Output of PriceForecaster.predict()
-            sentiment_output:   Output of SentimentService.analyse()
-            market_regime:      "trending" | "ranging" | "volatile"
-
-        Returns:
-            {
-              "action":           "buy" | "sell" | "hold"
-              "confidence":       float (0–1)
-              "ensemble_score":   float (-1 to +1)
-              "rl_score":         float
-              "transformer_score":float
-              "sentiment_score":  float
-              "weights":          dict
-              "market_regime":    str
-              "signal_action":    SignalAction enum value
-            }
-        """
-        weights = REGIME_WEIGHTS.get(market_regime, REGIME_WEIGHTS["ranging"])
-
-        # ——— Convert each model output to a -1..+1 directional score ———————
-
-        # RL: action_id mapped to direction, scaled by confidence
+        # RL score
         rl_action_id = rl_output.get("action_id", 0)
         rl_conf      = rl_output.get("confidence", 0.0)
-        if rl_action_id == 1:    rl_score =  rl_conf   # BUY
-        elif rl_action_id == 2:  rl_score = -rl_conf   # SELL
-        else:                    rl_score =  0.0        # HOLD
+        if rl_action_id == 1:   rl_score =  rl_conf
+        elif rl_action_id == 2: rl_score = -rl_conf
+        else:                   rl_score =  0.0
 
-        # Transformer: use 1-day predicted delta, scaled by confidence
+        # Transformer score
         tf_delta = transformer_output.get("delta_1d", 0.0)
         tf_conf  = transformer_output.get("confidence", 0.0)
-        # Normalise delta to -1..+1 (2% move = full score)
         tf_score = max(-1.0, min(1.0, tf_delta / 0.02)) * tf_conf
 
-        # Sentiment: score already in -1..+1, scaled by magnitude
+        # Sentiment score
         sent_score = sentiment_output.get("score", 0.0)
         sent_mag   = sentiment_output.get("magnitude", 0.0)
-        sent_score_weighted = sent_score * sent_mag
+        sent_weighted = sent_score * sent_mag
 
-        # ——— Weighted blend —————————————————————————————————————
+        # Weighted blend
         ensemble_score = (
-            weights["rl"]          * rl_score +
-            weights["transformer"] * tf_score +
-            weights["sentiment"]   * sent_score_weighted
+            w["rl"]          * rl_score +
+            w["transformer"] * tf_score +
+            w["sentiment"]   * sent_weighted
         )
 
-        # Confidence = absolute value of ensemble score (how decisive the blend is)
         confidence = min(abs(ensemble_score), 1.0)
 
-        # ——— Threshold to final action ——————————————————————————————
-        if ensemble_score >  MIN_CONFIDENCE_THRESHOLD:
-            action       = "buy"
-            signal_action = SignalAction.buy
+        if ensemble_score > MIN_CONFIDENCE_THRESHOLD:
+            action, signal_action = "buy",  SignalAction.buy
         elif ensemble_score < -MIN_CONFIDENCE_THRESHOLD:
-            action       = "sell"
-            signal_action = SignalAction.sell
+            action, signal_action = "sell", SignalAction.sell
         else:
-            action       = "hold"
-            signal_action = SignalAction.hold
+            action, signal_action = "hold", SignalAction.hold
 
         return {
             "action":            action,
@@ -132,38 +71,29 @@ class EnsembleEngine:
             "ensemble_score":    round(ensemble_score, 4),
             "rl_score":          round(rl_score, 4),
             "transformer_score": round(tf_score, 4),
-            "sentiment_score":   round(sent_score_weighted, 4),
-            "weights":           weights,
+            "sentiment_score":   round(sent_weighted, 4),
+            "weights":           w,
+            "weights_source":    w.get("source", "static"),
             "market_regime":     market_regime,
             "signal_action":     signal_action,
         }
 
-    def audit_record(self, ensemble_result: dict, rl_output: dict,
-                     transformer_output: dict, sentiment_output: dict) -> dict:
-        """
-        Build the complete signal audit record stored in the database.
-        This is what the chatbot reads to explain every decision.
-        """
+    def audit_record(self, ensemble_result, rl_output, transformer_output, sentiment_output):
         return {
             "action":           ensemble_result["action"],
             "confidence":       ensemble_result["confidence"],
             "ensemble_score":   ensemble_result["ensemble_score"],
             "market_regime":    ensemble_result["market_regime"],
             "weights":          ensemble_result["weights"],
-
-            # RL model details
-            "rl_action":        rl_output.get("action"),
-            "rl_confidence":    rl_output.get("confidence"),
-            "rl_q_values":      rl_output.get("q_values"),
-
-            # Transformer details
+            "weights_source":   ensemble_result.get("weights_source", "static"),
+            "rl_action":            rl_output.get("action"),
+            "rl_confidence":        rl_output.get("confidence"),
+            "rl_q_values":          rl_output.get("q_values"),
             "transformer_delta_1d":   transformer_output.get("delta_1d"),
             "transformer_delta_3d":   transformer_output.get("delta_3d"),
             "transformer_delta_5d":   transformer_output.get("delta_5d"),
             "transformer_direction":  transformer_output.get("direction"),
             "transformer_confidence": transformer_output.get("confidence"),
-
-            # Sentiment details
             "sentiment_score":     sentiment_output.get("score"),
             "sentiment_magnitude": sentiment_output.get("magnitude"),
             "sentiment_direction": sentiment_output.get("direction"),
@@ -172,7 +102,6 @@ class EnsembleEngine:
         }
 
 
-# Module-level singleton
 _engine: Optional[EnsembleEngine] = None
 
 def get_ensemble_engine() -> EnsembleEngine:
