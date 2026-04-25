@@ -65,7 +65,15 @@ const Signals: React.FC = () => {
     queryKey: queryKeys.signal(selectedAsset?.symbol || ''),
     queryFn: () => getLatestSignal(selectedAsset!.symbol),
     enabled: !!selectedAsset,
+    retry: false,  // don't retry 404s
   });
+
+  // Auto-generate signal if none exists for selected asset
+  useEffect(() => {
+    if (!selectedAsset || isSignalLoading || signal) return;
+    // No signal in DB for this asset — auto-generate
+    generateMutation.mutate(selectedAsset.symbol);
+  }, [selectedAsset?.symbol, isSignalLoading, signal]);
 
   // Generate signal mutation
   const generateMutation = useMutation({
@@ -336,7 +344,14 @@ const Signals: React.FC = () => {
 
                     <div className="pt-4 border-t border-border-default space-y-4">
                       {/* Open Trade button — only show for BUY signals above 60% */}
-                      {signal.action === 'buy' && signal.confidence >= 0.60 && (
+                      {signal.action === 'buy' && signal.confidence >= 0.60 && !marketStatus?.is_open && (
+                        <div className="bg-amber/5 border border-amber/20 rounded-xl p-3 flex items-center gap-2 text-xs text-amber">
+                          <AlertTriangle size={14} />
+                          Market is closed. Trading resumes {marketStatus?.next_open ?? 'next trading day'}.
+                        </div>
+                      )}
+
+                      {signal.action === 'buy' && signal.confidence >= 0.60 && marketStatus?.is_open && (
                         <div className="bg-green/5 border border-green/20 rounded-xl p-4">
                           <div className="flex items-center justify-between mb-3">
                             <div>

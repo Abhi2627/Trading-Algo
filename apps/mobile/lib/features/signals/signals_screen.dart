@@ -8,6 +8,7 @@ import '../../core/models/signal.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/signal_badge.dart';
 import '../../shared/widgets/loading_state.dart';
+import '../../shared/widgets/candlestick_chart.dart';
 import '../../main.dart' show dioProvider;
 
 // ---------------------------------------------------------------------------
@@ -706,6 +707,7 @@ class _SignalDetailView extends ConsumerWidget {
                   )
                 : _SignalDetailBody(
                     signal: signal,
+                    symbol: asset.symbol,
                     explanation: explanation,
                     explaining: explaining,
                     onExplain: () => onExplain(signal.signalId),
@@ -723,11 +725,13 @@ class _SignalDetailView extends ConsumerWidget {
 
 class _SignalDetailBody extends StatelessWidget {
   final Signal signal;
+  final String symbol;
   final String? explanation;
   final bool explaining;
   final VoidCallback onExplain;
   const _SignalDetailBody({
     required this.signal,
+    required this.symbol,
     required this.explanation,
     required this.explaining,
     required this.onExplain,
@@ -738,6 +742,9 @@ class _SignalDetailBody extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Candlestick Chart
+        CandlestickChart(symbol: symbol),
+        const SizedBox(height: 16),
         Row(
           children: [
             SignalBadge(action: signal.action, confidence: signal.confidence),

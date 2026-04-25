@@ -74,6 +74,15 @@ class Endpoints {
     return resp.data as Map<String, dynamic>;
   }
 
+  Future<List<Map<String, dynamic>>> getOHLCV(String symbol, {int days = 90}) async {
+    final resp = await _dio.get(
+      '/signals/ohlcv/${Uri.encodeComponent(symbol)}',
+      queryParameters: {'days': days},
+    );
+    final list = resp.data['candles'] as List;
+    return list.cast<Map<String, dynamic>>();
+  }
+
   // ---- Wallet ----
   Future<WalletSummary> getWalletSummary() async {
     final resp = await _dio.get('/wallet/summary');

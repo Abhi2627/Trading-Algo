@@ -240,9 +240,9 @@ const Dashboard: React.FC = () => {
                 {wallet?.risk_mode} Mode
               </span>
               <p className="text-xs text-text-secondary mt-2">
-                {wallet?.risk_mode === 'normal' ? 'Systems operating at full capacity' :
-                 wallet?.risk_mode === 'conservative' ? 'Reduced position sizing active' :
-                 'Trading halted due to risk threshold'}
+                {wallet?.risk_mode === 'normal' ? 'All systems active — trading at full capacity' :
+                 wallet?.risk_mode === 'conservative' ? 'Reduced position sizing — low cash balance' :
+                 'Trading STOPPED — wallet empty or risk limit hit. Add funds and call /wallet/resume.'}
               </p>
             </div>
           </div>
