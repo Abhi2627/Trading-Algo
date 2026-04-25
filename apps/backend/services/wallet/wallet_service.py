@@ -293,12 +293,12 @@ class WalletService:
 
     async def withdraw(self, db: AsyncSession, amount: float, reason: str = "withdrawal") -> dict:
         """
-        Withdraw cash from wallet — simulates transferring money to bank.
-        System automatically recalibrates to the new capital tier.
-        Rules:
-          - Cannot withdraw more than available cash balance
-          - Cannot withdraw if it leaves less than \u20b9500 (minimum buffer)
-          - Open positions are NOT affected — user must close them manually
+        Withdraw cash from wallet — any amount, any reason, including full emergency.
+        Scenarios handled:
+          1. Partial: system recalibrates tier, continues trading
+          2. Large (leaves <2K): switches to conservative mode, warns you
+          3. Full/Emergency: withdraws all cash, halts trading, notifies about open positions
+          4. Open positions: cannot force-sell, system keeps monitoring them
         """
         from services.wallet.risk_manager import get_capital_tier
 
@@ -307,50 +307,137 @@ class WalletService:
         if amount <= 0:
             return {"error": "Withdrawal amount must be positive"}
 
-        if amount > wallet.cash_balance:
-            return {
-                "error": f"Insufficient cash. Available: \u20b9{wallet.cash_balance:.2f}, Requested: \u20b9{amount:.2f}",
-                "available_cash": round(wallet.cash_balance, 2),
-            }
+        # Get open positions
+        open_result = await db.execute(
+            select(Trade, Asset)
+            .join(Asset, Trade.asset_id == Asset.id)
+            .where(Trade.status == TradeStatus.open)
+        )
+        open_positions = open_result.all()
+        open_count     = len(open_positions)
+        open_value     = 0.0
+        position_details = []
+        for trade, asset in open_positions:
+            price = fetch_latest_price(asset.symbol) or trade.entry_price
+            val   = price * trade.quantity
+            pnl   = (price - trade.entry_price) * trade.quantity
+            open_value += val
+            position_details.append({
+                "symbol":        asset.symbol,
+                "quantity":      trade.quantity,
+                "current_value": round(val, 2),
+                "unrealised_pnl":round(pnl, 2),
+                "trade_id":      str(trade.id),
+            })
 
-        remaining = wallet.cash_balance - amount
-        if remaining < 500:
-            max_withdraw = wallet.cash_balance - 500
-            return {
-                "error": f"Cannot withdraw \u20b9{amount:.2f} — must keep \u20b9500 minimum buffer",
-                "max_withdrawable": round(max(max_withdraw, 0), 2),
-            }
+        available_cash = wallet.cash_balance
+        is_emergency   = amount >= available_cash
 
-        # Execute withdrawal
+        # Emergency full withdrawal
+        if is_emergency:
+            actual_amount       = round(available_cash, 2)
+            wallet.cash_balance = 0.0
+            wallet.risk_mode    = RiskMode.halted
+            db.add(WalletTransaction(
+                wallet_id    = wallet.id,
+                type         = TransactionType.topup,
+                amount       = -actual_amount,
+                balance_after= 0.0,
+                description  = f"EMERGENCY withdrawal: Rs{actual_amount} ({reason})",
+            ))
+            await db.flush()
+            logger.warning(f"Emergency withdrawal: Rs{actual_amount} | {open_count} positions still open worth Rs{open_value:.0f}")
+            response = {
+                "withdrawn":         actual_amount,
+                "new_cash_balance":  0.0,
+                "new_total_equity":  round(open_value, 2),
+                "emergency":         True,
+                "trading_halted":    True,
+                "open_positions":    open_count,
+            }
+            if open_count > 0:
+                response["alert"] = (
+                    f"Emergency withdrawal done. Rs{actual_amount:.0f} transferred. "
+                    f"You still have {open_count} open position(s) worth Rs{open_value:.0f}. "
+                    f"System is HALTED - no new trades. "
+                    f"Open positions will auto-close at stop-loss or take-profit. "
+                    f"Profits will return to wallet. Call /wallet/resume when ready to trade again."
+                )
+                response["open_position_details"] = position_details
+            else:
+                response["alert"] = (
+                    f"Emergency withdrawal done. Rs{actual_amount:.0f} transferred. "
+                    f"Wallet is empty. Add money via /wallet/topup to resume trading."
+                )
+            return response
+
+        # Normal partial withdrawal
         wallet.cash_balance -= amount
         new_equity = wallet.cash_balance + wallet.invested_balance
         new_tier   = get_capital_tier(new_equity)
+        warnings   = []
+
+        if wallet.cash_balance < 2000:
+            wallet.risk_mode = RiskMode.conservative
+            warnings.append(
+                f"Low cash (Rs{wallet.cash_balance:.0f} remaining). "
+                f"Switched to conservative mode. Add Rs{2000 - wallet.cash_balance:.0f} to resume normal trading."
+            )
+        elif wallet.cash_balance < 5000:
+            warnings.append(f"Cash low: Rs{wallet.cash_balance:.0f}. Position sizing reduced automatically.")
+
+        if open_count > 0 and wallet.cash_balance < 1000:
+            warnings.append(
+                f"{open_count} position(s) still open worth Rs{open_value:.0f}. "
+                f"They will auto-close at targets. Profits rebuild your cash."
+            )
 
         db.add(WalletTransaction(
-            wallet_id=wallet.id,
-            type=TransactionType.topup,   # reuse topup type with negative amount
-            amount=-amount,
-            balance_after=wallet.cash_balance,
-            description=f"Withdrawal: \u20b9{amount} ({reason})",
+            wallet_id    = wallet.id,
+            type         = TransactionType.topup,
+            amount       = -amount,
+            balance_after= wallet.cash_balance,
+            description  = f"Withdrawal: Rs{amount} ({reason})",
         ))
         await db.flush()
+        logger.info(f"Withdrawal: Rs{amount} | Remaining: Rs{wallet.cash_balance:.0f} | Tier: {new_tier['tier']} | Open: {open_count}")
 
-        logger.info(f"Withdrawal: \u20b9{amount} | New balance: \u20b9{wallet.cash_balance:.2f} | Tier: {new_tier['tier']}")
+        response = {
+            "withdrawn":         round(amount, 2),
+            "new_cash_balance":  round(wallet.cash_balance, 2),
+            "new_total_equity":  round(new_equity, 2),
+            "new_tier":          new_tier["tier"],
+            "new_tier_label":    new_tier["label"],
+            "max_positions_now": new_tier["max_positions"],
+            "position_size_now": round(new_equity * new_tier["position_pct"], 2),
+            "open_positions":    open_count,
+            "emergency":         False,
+            "trading_halted":    wallet.risk_mode == RiskMode.halted,
+        }
+        if warnings:
+            response["warnings"] = warnings
+        if open_count > 0:
+            response["open_position_details"] = position_details
+        return response
 
+    async def resume_trading(self, db: AsyncSession) -> dict:
+        """Resume trading after emergency halt. Requires cash > 0."""
+        wallet = await self.get_or_create(db)
+        if wallet.cash_balance <= 0:
+            return {
+                "error": "Cannot resume - wallet is empty.",
+                "action": "Add funds via POST /wallet/topup first."
+            }
+        wallet.risk_mode = wallet.compute_risk_mode()
+        await db.flush()
+        from services.wallet.risk_manager import get_capital_tier
+        tier = get_capital_tier(wallet.total_equity)
         return {
-            "withdrawn":        round(amount, 2),
-            "new_cash_balance": round(wallet.cash_balance, 2),
-            "new_total_equity": round(new_equity, 2),
-            "new_tier":         new_tier['tier'],
-            "new_tier_label":   new_tier['label'],
-            "new_max_positions":new_tier['max_positions'],
-            "new_position_size":round(new_equity * new_tier['position_pct'], 2),
-            "message": (
-                f"\u20b9{amount:.0f} withdrawn. You are now in Tier {new_tier['tier']} ({new_tier['label']}). "
-                f"{new_tier['description']}. "
-                + (f"With \u20b9{new_equity:.0f} remaining, consider Nifty BeES (\u20b9~240/unit). "
-                   if new_tier['etf_only'] else "")
-            ),
+            "resumed":   True,
+            "risk_mode": wallet.risk_mode.value,
+            "cash":      round(wallet.cash_balance, 2),
+            "tier":      tier["tier"],
+            "message":   f"Trading resumed. Tier {tier['tier']} ({tier['label']}). {tier['description']}."
         }
 
     # ------------------------------------------------------------------ #

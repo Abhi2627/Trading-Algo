@@ -172,3 +172,15 @@ async def trade_history(
             for t, a in rows
         ],
     }
+
+
+@router.post("/resume")
+async def resume_trading(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Resume trading after emergency halt.
+    Only works if cash balance > 0.
+    """
+    return await get_wallet_service().resume_trading(db)
