@@ -12,6 +12,10 @@ API_KEY="abhay-algotrade-2025"
 API_URL="http://localhost:8000"
 LOG_FILE="$ROOT/logs/startup.log"
 
+# Trap Ctrl+C and run stop.sh automatically
+# This means pressing Ctrl+C in this terminal stops everything cleanly
+trap 'echo ""; echo "Caught Ctrl+C — stopping AlgoTrade..."; "$ROOT/stop.sh"; exit 0' INT TERM
+
 mkdir -p "$ROOT/logs"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
