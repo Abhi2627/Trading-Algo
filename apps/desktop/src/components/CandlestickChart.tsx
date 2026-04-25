@@ -241,22 +241,34 @@ const CandlestickChart: React.FC<Props> = ({ symbol, entryPrice, stopLoss, takeP
         {/* Tooltip */}
         {tooltip && (
           <div
-            className="fixed z-50 pointer-events-none bg-surface-card border border-border-default rounded-lg p-2 text-xs shadow-xl"
-            style={{ left: tooltip.x + 12, top: tooltip.y - 60 }}
+            className="fixed z-50 pointer-events-none rounded-lg p-3 text-xs shadow-2xl"
+            style={{
+              left: tooltip.x + 12,
+              top: tooltip.y - 80,
+              background: 'rgba(15, 15, 25, 0.97)',
+              border: '1px solid rgba(124, 58, 237, 0.4)',
+              backdropFilter: 'none',
+              minWidth: 140,
+            }}
           >
-            <div className="font-semibold text-text-primary mb-1">
+            <div className="font-semibold text-white mb-2 pb-1.5 border-b border-white/10">
               {new Date(tooltip.candle.date).toLocaleDateString('en-IN', {
                 day: 'numeric', month: 'short', year: 'numeric'
               })}
             </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-text-muted">
-              <span>O</span><span className="text-text-primary font-mono">₹{tooltip.candle.open.toFixed(2)}</span>
-              <span>H</span><span className="text-green font-mono">₹{tooltip.candle.high.toFixed(2)}</span>
-              <span>L</span><span className="text-red font-mono">₹{tooltip.candle.low.toFixed(2)}</span>
-              <span>C</span><span className="font-mono" style={{ color: tooltip.candle.close >= tooltip.candle.open ? '#22C55E' : '#EF4444' }}>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <span className="text-gray-400">Open</span>
+              <span className="text-white font-mono">₹{tooltip.candle.open.toFixed(2)}</span>
+              <span className="text-gray-400">High</span>
+              <span className="text-green-400 font-mono">₹{tooltip.candle.high.toFixed(2)}</span>
+              <span className="text-gray-400">Low</span>
+              <span className="text-red-400 font-mono">₹{tooltip.candle.low.toFixed(2)}</span>
+              <span className="text-gray-400">Close</span>
+              <span className="font-mono font-bold" style={{ color: tooltip.candle.close >= tooltip.candle.open ? '#4ade80' : '#f87171' }}>
                 ₹{tooltip.candle.close.toFixed(2)}
               </span>
-              <span>Vol</span><span className="text-text-primary font-mono">{(tooltip.candle.volume / 1e6).toFixed(2)}M</span>
+              <span className="text-gray-400">Vol</span>
+              <span className="text-white font-mono">{(tooltip.candle.volume / 1e6).toFixed(2)}M</span>
             </div>
           </div>
         )}

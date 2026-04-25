@@ -69,6 +69,11 @@ class Endpoints {
     return list.cast<Map<String, dynamic>>();
   }
 
+  Future<Map<String, dynamic>> getMarketStatus() async {
+    final resp = await _dio.get('/signals/market-status');
+    return resp.data as Map<String, dynamic>;
+  }
+
   // ---- Wallet ----
   Future<WalletSummary> getWalletSummary() async {
     final resp = await _dio.get('/wallet/summary');

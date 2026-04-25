@@ -35,7 +35,7 @@ const Signals: React.FC = () => {
   const location = useLocation();
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'All' | 'Equity' | 'Crypto' | 'Forex'>('All');
+  const [activeTab, setActiveTab] = useState<'All' | 'Equity'>('All');
   const [explanation, setExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
 
@@ -170,7 +170,7 @@ const Signals: React.FC = () => {
           </div>
 
           <div className="flex bg-background-primary p-1 rounded-lg border border-border-default">
-            {(['All', 'Equity', 'Crypto', 'Forex'] as const).map(tab => (
+            {(['All', 'Equity'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}

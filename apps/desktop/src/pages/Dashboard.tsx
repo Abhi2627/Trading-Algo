@@ -6,9 +6,11 @@ import {
   Wallet as WalletIcon, 
   Banknote, 
   ArrowDownCircle,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle,
+  Clock
 } from 'lucide-react';
-import { getWalletSummary, getTopPicks, TopPick } from '../lib/api';
+import { getWalletSummary, getTopPicks, getMarketStatus, TopPick } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
 import StatCard from '../components/StatCard';
 import SignalBadge from '../components/SignalBadge';
@@ -39,7 +41,6 @@ const Dashboard: React.FC = () => {
     queryKey: queryKeys.topPicks,
     queryFn: async () => {
       const res = await getTopPicks(10);
-      // Deduplicate: if same stock appears on both NSE and BSE, keep NSE only
       const seen = new Set<string>();
       return res.picks.filter((pick: TopPick) => {
         const stockName = pick.symbol.split(':').pop() ?? pick.symbol;
@@ -49,6 +50,12 @@ const Dashboard: React.FC = () => {
       }).slice(0, 5);
     },
     refetchInterval: 30000,
+  });
+
+  const { data: marketStatus } = useQuery({
+    queryKey: ['market-status'],
+    queryFn: getMarketStatus,
+    refetchInterval: 60 * 1000,
   });
 
   if (isWalletLoading || isSignalsLoading) {
@@ -71,6 +78,22 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
+      {/* Market Status Banner */}
+      {marketStatus && !marketStatus.is_open && (
+        <div className="bg-amber/10 border border-amber/30 rounded-xl px-4 py-3 flex items-center gap-3">
+          <AlertTriangle size={16} className="text-amber shrink-0" />
+          <div className="text-sm flex-1">
+            <span className="font-bold text-amber">Market Closed</span>
+            <span className="text-text-muted ml-2">{marketStatus.reason}</span>
+            {marketStatus.next_open && (
+              <span className="text-text-muted ml-2">· Opens: {marketStatus.next_open}</span>
+            )}
+          </div>
+          <span className="text-xs text-text-muted flex items-center gap-1">
+            <Clock size={12} /> Signals from last trading day
+          </span>
+        </div>
+      )}
       {/* Top Row: Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
@@ -103,6 +126,11 @@ const Dashboard: React.FC = () => {
         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
           <TrendingUp className="text-accent" />
           Today's Top Picks
+          {marketStatus && !marketStatus.is_open && (
+            <span className="text-xs font-normal text-amber bg-amber/10 px-2 py-0.5 rounded-full border border-amber/30">
+              Reference only — market closed
+            </span>
+          )}
         </h2>
         {!topPicksData || topPicksData.length === 0 ? (
           <div className="bg-background-surface border border-dashed border-border-default rounded-xl p-8 text-center text-text-muted">

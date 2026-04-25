@@ -15,6 +15,11 @@ final walletProvider = FutureProvider<WalletSummary>((ref) async {
   return Endpoints(dio).getWalletSummary();
 });
 
+final marketStatusProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  final dio = await ref.watch(dioProvider.future);
+  return Endpoints(dio).getMarketStatus();
+});
+
 final dashboardSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final dio = await ref.watch(dioProvider.future);
   return Endpoints(dio).getTopPicks(limit: 5);
@@ -70,6 +75,7 @@ class DashboardScreen extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(walletProvider);
           ref.invalidate(dashboardSignalsProvider);
+          ref.invalidate(marketStatusProvider);
         },
         child: walletAsync.when(
           loading: () => const LoadingState(),
@@ -77,9 +83,52 @@ class DashboardScreen extends ConsumerWidget {
             message: 'Could not load wallet.\nMake sure the backend is running.',
             onRetry: () => ref.invalidate(walletProvider),
           ),
-          data: (wallet) => ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
+          data: (wallet) {
+            final marketAsync = ref.watch(marketStatusProvider);
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                // Market Status Banner
+                marketAsync.maybeWhen(
+                  data: (status) {
+                    final isOpen = status['is_open'] as bool? ?? true;
+                    if (isOpen) return const SizedBox.shrink();
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.amber.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.amber.withOpacity(0.4)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            color: AppColors.amber, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Market Closed — ${status['reason'] ?? ''}',
+                                style: const TextStyle(
+                                  color: AppColors.amber,
+                                  fontSize: 12, fontWeight: FontWeight.w700),
+                              ),
+                              if (status['next_open'] != null)
+                                Text(
+                                  'Opens: ${status['next_open']}',
+                                  style: const TextStyle(
+                                    color: AppColors.textMuted, fontSize: 10),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ]),
+                    );
+                  },
+                  orElse: () => const SizedBox.shrink(),
+                ),
               GridView.count(
                 crossAxisCount: 2, shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
@@ -132,7 +181,8 @@ class DashboardScreen extends ConsumerWidget {
                     ),
               const SizedBox(height: 80),
             ],
-          ),
+          );
+          },
         ),
       ),
     );
