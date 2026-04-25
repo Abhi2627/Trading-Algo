@@ -181,9 +181,6 @@ async def _auto_execute_async() -> dict:
         )
 
         # --- 3. Count existing open positions ---
-        open_count_result = await db.execute(
-            select(Signal)  # reuse import
-        )
         open_positions_result = await db.execute(
             select(Trade).where(Trade.status == TradeStatus.open)
         )
@@ -206,10 +203,11 @@ async def _auto_execute_async() -> dict:
             date.today(), datetime.min.time()
         ).replace(tzinfo=timezone.utc)
 
-        # Confidence threshold: higher threshold = fewer but better trades
-        # For small capital (Tier 1/2), be conservative: require 75%+
-        # For larger capital (Tier 3/4), can be less strict: 65%+
-        min_confidence = 0.75 if tier["tier"] <= 2 else 0.65
+        # Confidence threshold per tier:
+        # Tier 1/2 (small capital): 65% — need more opportunities
+        # Tier 3/4 (larger capital): 60% — can afford to be less strict
+        # Stop-loss + trailing stop protect downside regardless
+        min_confidence = 0.65 if tier["tier"] <= 2 else 0.60
 
         signals_result = await db.execute(
             select(Signal, Asset)
@@ -222,19 +220,24 @@ async def _auto_execute_async() -> dict:
         )
         top_signals = signals_result.all()
 
-        # Deduplicate: NSE over BSE
-        seen_tickers: set = set()
-        unique_signals = []
+        # Deduplicate signals: same symbol, keep highest confidence only
+        # Also prefer NSE over BSE
+        seen_tickers: dict = {}  # ticker -> (signal, asset)
         for s, a in top_signals:
             ticker = a.symbol.split(":")[-1]
-            if a.symbol.startswith("NSE:") and ticker not in seen_tickers:
-                seen_tickers.add(ticker)
-                unique_signals.append((s, a))
-        for s, a in top_signals:
-            ticker = a.symbol.split(":")[-1]
-            if a.symbol.startswith("BSE:") and ticker not in seen_tickers:
-                seen_tickers.add(ticker)
-                unique_signals.append((s, a))
+            exchange = a.symbol.split(":")[0]
+            if ticker not in seen_tickers:
+                seen_tickers[ticker] = (s, a)
+            else:
+                existing_s, existing_a = seen_tickers[ticker]
+                existing_exchange = existing_a.symbol.split(":")[0]
+                # Prefer NSE over BSE, then higher confidence
+                if exchange == "NSE" and existing_exchange != "NSE":
+                    seen_tickers[ticker] = (s, a)
+                elif exchange == existing_exchange and s.confidence > existing_s.confidence:
+                    seen_tickers[ticker] = (s, a)
+
+        unique_signals = list(seen_tickers.values())
 
         logger.info(
             f"Found {len(unique_signals)} unique BUY signals ≥{min_confidence:.0%} confidence"
