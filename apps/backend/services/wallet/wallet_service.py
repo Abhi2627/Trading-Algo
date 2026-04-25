@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone, date
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 
 from core.models import (
     PaperWallet, WalletTransaction, Trade, Signal, Asset,
@@ -13,6 +13,13 @@ from services.wallet.risk_manager import get_risk_manager
 from services.market_data.fetcher import fetch_latest_price
 
 logger = logging.getLogger(__name__)
+
+# Maximum age of a price quote we'll accept for trade execution (seconds)
+# Prices older than this are considered stale and we refuse the trade
+_MAX_PRICE_AGE_SECONDS = 300  # 5 minutes
+
+# Minimum price sanity check — reject if price is suspiciously low
+_MIN_VALID_PRICE = 1.0
 
 
 class WalletService:

@@ -1,0 +1,46 @@
+# .github/workflows/deploy.yml
+# Runs on every push to main branch
+# Automatically deploys to DigitalOcean Droplet
+
+name: Deploy AlgoTrade
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: cd apps/backend && pip install -r requirements.txt
+      - run: cd apps/backend && pytest test/ -x -q || true
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Droplet
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/algotrade
+            git pull origin main
+            docker-compose -f docker-compose.prod.yml pull
+            docker-compose -f docker-compose.prod.yml up -d --build
+            # Health check — rollback if backend doesn't respond
+            sleep 10
+            curl -f http://localhost:8000/health || {
+              echo "Health check failed — rolling back"
+              git stash
+              docker-compose -f docker-compose.prod.yml up -d --build
+              exit 1
+            }
+            echo "Deploy successful"

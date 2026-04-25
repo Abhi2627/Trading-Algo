@@ -40,6 +40,17 @@ celery_app.conf.update(
 # Beat schedule — all times in IST
 # ---------------------------------------------------------------------------
 celery_app.conf.beat_schedule = {
+    # Auto-execute trades at 9:20 AM — 5 min after market opens
+    # This is a fallback in case the post-scan trigger fails
+    "auto-execute-trades": {
+        "task":    "workers.tasks.market_tasks.auto_execute_trades",
+        "schedule": crontab(
+            hour=9,
+            minute=20,
+            day_of_week="1-5",
+        ),
+    },
+
     # Generate signals for all active assets before market open
     "morning-signal-scan": {
         "task":    "workers.tasks.market_tasks.scan_all_assets",
