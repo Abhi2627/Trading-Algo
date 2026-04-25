@@ -19,6 +19,77 @@ async def verify_key(key: str = Security(api_key_header)):
     return key
 
 
+# NSE holidays 2025-2026 (add more as announced)
+NSE_HOLIDAYS = {
+    # 2025
+    "2025-01-26", "2025-02-19", "2025-03-14", "2025-03-31",
+    "2025-04-10", "2025-04-14", "2025-04-18", "2025-05-01",
+    "2025-08-15", "2025-08-27", "2025-10-02", "2025-10-02",
+    "2025-10-21", "2025-10-22", "2025-11-05", "2025-12-25",
+    # 2026
+    "2026-01-26", "2026-03-19", "2026-04-02", "2026-04-03",
+    "2026-04-14", "2026-04-17", "2026-05-01", "2026-06-11",
+    "2026-08-15", "2026-10-02", "2026-10-20", "2026-12-25",
+}
+
+
+def is_market_open() -> dict:
+    """Check if NSE is currently open."""
+    from datetime import date, datetime, timezone, timedelta
+    # IST = UTC+5:30
+    ist_now  = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    today    = ist_now.date()
+    weekday  = today.weekday()  # 0=Mon, 6=Sun
+    date_str = today.isoformat()
+
+    if weekday >= 5:  # Saturday or Sunday
+        return {
+            "is_open": False,
+            "reason":  f"Weekend ({['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][weekday]})",
+            "next_open": "Monday 9:15 AM IST",
+            "market_hours": "9:15 AM - 3:30 PM IST, Mon-Fri",
+        }
+
+    if date_str in NSE_HOLIDAYS:
+        return {
+            "is_open": False,
+            "reason":  f"NSE Holiday ({date_str})",
+            "next_open": "Next trading day 9:15 AM IST",
+            "market_hours": "9:15 AM - 3:30 PM IST, Mon-Fri",
+        }
+
+    market_open  = ist_now.replace(hour=9,  minute=15, second=0, microsecond=0)
+    market_close = ist_now.replace(hour=15, minute=30, second=0, microsecond=0)
+    pre_open     = ist_now.replace(hour=9,  minute=0,  second=0, microsecond=0)
+
+    if ist_now < pre_open:
+        return {
+            "is_open": False,
+            "reason":  "Pre-market (opens at 9:15 AM IST)",
+            "next_open": "Today 9:15 AM IST",
+            "market_hours": "9:15 AM - 3:30 PM IST, Mon-Fri",
+        }
+    elif ist_now > market_close:
+        return {
+            "is_open": False,
+            "reason":  "Market closed (closed at 3:30 PM IST)",
+            "next_open": "Tomorrow 9:15 AM IST" if weekday < 4 else "Monday 9:15 AM IST",
+            "market_hours": "9:15 AM - 3:30 PM IST, Mon-Fri",
+        }
+
+    return {
+        "is_open": True,
+        "reason":  "Market open",
+        "closes_at": "3:30 PM IST",
+        "market_hours": "9:15 AM - 3:30 PM IST, Mon-Fri",
+    }
+
+@router.get("/market-status")
+async def market_status():
+    """Check if NSE is currently open for trading."""
+    return is_market_open()
+
+
 @router.post("/generate/{symbol}")
 async def trigger_signal(
     symbol: str,
@@ -122,9 +193,13 @@ async def top_picks(
     deduped.sort(key=lambda x: x[0].ensemble_score, reverse=True)
     deduped = deduped[:min(limit, 20)]
 
+    market = is_market_open()
+
     return {
-        "date":  date.today().isoformat(),
-        "count": len(deduped),
+        "date":          date.today().isoformat(),
+        "count":         len(deduped),
+        "market_status": market,
+        "note":          None if market["is_open"] else f"Market closed: {market['reason']}. Showing Friday's signals for reference only. No trading recommended.",
         "picks": [
             {
                 "signal_id":     str(s.id),
@@ -139,6 +214,40 @@ async def top_picks(
                 "created_at":    s.created_at.isoformat(),
             }
             for s, a in deduped
+        ],
+    }
+
+
+@router.get("/ohlcv/{symbol}")
+async def get_ohlcv(
+    symbol: str,
+    days: int = 90,
+    _: str = Security(verify_key),
+):
+    """
+    Return OHLCV data for candlestick chart.
+    days: number of trading days to return (default 90 = ~3 months)
+    """
+    from services.market_data.fetcher import fetch_historical
+    df = fetch_historical(symbol.upper(), period_days=days, interval="1d")
+    if df is None or df.empty:
+        raise HTTPException(status_code=404, detail=f"No data for {symbol}")
+
+    # Return last `days` rows
+    df = df.tail(days)
+    return {
+        "symbol": symbol.upper(),
+        "days":   len(df),
+        "candles": [
+            {
+                "date":   str(idx.date()),
+                "open":   round(float(row["open"]),   2),
+                "high":   round(float(row["high"]),   2),
+                "low":    round(float(row["low"]),    2),
+                "close":  round(float(row["close"]),  2),
+                "volume": int(row["volume"]),
+            }
+            for idx, row in df.iterrows()
         ],
     }
 

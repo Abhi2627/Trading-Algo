@@ -254,6 +254,35 @@ export const explainSignal = async (signalId: string): Promise<ExplainResponse> 
   return data;
 };
 
+export const getOHLCV = async (symbol: string, days = 90) => {
+  const { data } = await api.get(`/signals/ohlcv/${encodeURIComponent(symbol)}`, {
+    params: { days },
+  });
+  return data as { symbol: string; days: number; candles: Candle[] };
+};
+
+export const getMarketStatus = async () => {
+  const { data } = await api.get('/signals/market-status');
+  return data as MarketStatus;
+};
+
+export interface Candle {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface MarketStatus {
+  is_open: boolean;
+  reason: string;
+  next_open?: string;
+  closes_at?: string;
+  market_hours: string;
+}
+
 export const healthCheck = async (): Promise<{ status: string; env: string }> => {
   const { data } = await api.get('/health');
   return data;

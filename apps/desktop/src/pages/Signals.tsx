@@ -20,6 +20,7 @@ import {
   explainSignal,
   openTrade,
   getWalletSummary,
+  getMarketStatus,
   Asset,
   Signal,
   AssetsResponse
@@ -27,6 +28,7 @@ import {
 import { queryKeys } from '../lib/queryKeys';
 import SignalBadge from '../components/SignalBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
+import CandlestickChart from '../components/CandlestickChart';
 
 const Signals: React.FC = () => {
   const queryClient = useQueryClient();
@@ -86,6 +88,13 @@ const Signals: React.FC = () => {
   const { data: wallet } = useQuery({
     queryKey: queryKeys.wallet,
     queryFn: getWalletSummary,
+  });
+
+  // Market status
+  const { data: marketStatus } = useQuery({
+    queryKey: ['market-status'],
+    queryFn: getMarketStatus,
+    refetchInterval: 60 * 1000, // refresh every minute
   });
 
   // Explain signal mutation (manual trigger)
@@ -217,6 +226,20 @@ const Signals: React.FC = () => {
           </div>
         ) : (
           <div className="p-8 max-w-4xl mx-auto space-y-8">
+            {/* Market Status Banner */}
+            {marketStatus && !marketStatus.is_open && (
+              <div className="bg-amber/10 border border-amber/30 rounded-xl px-4 py-3 flex items-center gap-3">
+                <AlertTriangle size={16} className="text-amber shrink-0" />
+                <div className="text-sm">
+                  <span className="font-bold text-amber">Market Closed</span>
+                  <span className="text-text-muted ml-2">{marketStatus.reason}</span>
+                  {marketStatus.next_open && (
+                    <span className="text-text-muted ml-2">· Opens: {marketStatus.next_open}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Asset Header */}
             <div className="flex justify-between items-center">
               <div>
@@ -250,6 +273,14 @@ const Signals: React.FC = () => {
                 <span className="text-sm font-medium">Failed to generate signal. Please try again.</span>
               </div>
             )}
+
+            {/* Candlestick Chart */}
+            <CandlestickChart
+              symbol={selectedAsset.symbol}
+              entryPrice={wallet?.open_positions.find(p => p.symbol === selectedAsset.symbol)?.entry_price}
+              stopLoss={wallet?.open_positions.find(p => p.symbol === selectedAsset.symbol)?.stop_loss}
+              takeProfit={wallet?.open_positions.find(p => p.symbol === selectedAsset.symbol)?.take_profit}
+            />
 
             {/* Signal Display */}
             <div className="space-y-6">
