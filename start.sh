@@ -168,21 +168,32 @@ log "Starting Celery worker..."
 pkill -f 'celery.*trading_platform' 2>/dev/null || true
 sleep 1
 
-celery -A workers.celery_app worker \
-    --loglevel=info \
-    --pool=solo \
-    > "$ROOT/logs/celery.log" 2>&1 &
-CELERY_PID=$!
-echo $CELERY_PID > "$ROOT/logs/celery.pid"
+# Start Celery in a new Terminal tab so you can see its output directly
+osascript << 'APPLESCRIPT'
+tell application "Terminal"
+    activate
+    tell application "System Events" to keystroke "t" using command down
+    delay 0.5
+    do script "cd /Users/abhaydandge/Projects/trading-platform/apps/backend && source venv/bin/activate && celery -A workers.celery_app worker --loglevel=info --pool=solo" in front window
+end tell
+APPLESCRIPT
 
-# Give Celery time to connect to Redis
-sleep 4
+# Give Celery time to start in the new tab
+sleep 5
 
-# Verify Celery connected
-if celery -A workers.celery_app inspect ping --timeout=5 &>/dev/null; then
-    ok "Celery connected to Redis"
+# Store PID for watchdog
+CELERY_PID=$(pgrep -f 'celery.*trading_platform' | head -1)
+if [ -n "$CELERY_PID" ]; then
+    echo $CELERY_PID > "$ROOT/logs/celery.pid"
+    ok "Celery started in new Terminal tab (PID $CELERY_PID)"
 else
-    warn "Celery ping failed — check logs/celery.log"
+    warn "Celery not detected — falling back to background mode"
+    celery -A workers.celery_app worker \
+        --loglevel=info \
+        --pool=solo \
+        > "$ROOT/logs/celery.log" 2>&1 &
+    CELERY_PID=$!
+    echo $CELERY_PID > "$ROOT/logs/celery.pid"
 fi
 
 # ── Step 7: Morning tasks ─────────────────────────────────────────────────────
