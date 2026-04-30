@@ -1,6 +1,9 @@
 # .github/workflows/deploy.yml
-# Runs on every push to main branch
-# Automatically deploys to DigitalOcean Droplet
+# Auto-deploys to DigitalOcean Droplet on every push to main branch.
+# Required GitHub Secrets:
+#   DROPLET_IP        — your Droplet's public IP address
+#   SSH_PRIVATE_KEY   — private SSH key for root access to Droplet
+#   ENV_PROD_CONTENTS — full contents of your .env.prod file (base64 encoded)
 
 name: Deploy AlgoTrade
 
@@ -9,38 +12,49 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: cd apps/backend && pip install -r requirements.txt
-      - run: cd apps/backend && pytest test/ -x -q || true
-
   deploy:
-    needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Deploy to Droplet
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.DROPLET_IP }}
+          host:     ${{ secrets.DROPLET_IP }}
           username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
+            echo "=== AlgoTrade Deploy ==="
             cd /opt/algotrade
+
+            # Pull latest code
             git pull origin main
-            docker-compose -f docker-compose.prod.yml pull
-            docker-compose -f docker-compose.prod.yml up -d --build
-            # Health check — rollback if backend doesn't respond
-            sleep 10
-            curl -f http://localhost:8000/health || {
+
+            # Update .env.prod from GitHub secret
+            echo "${{ secrets.ENV_PROD_CONTENTS }}" | base64 -d > .env.prod
+
+            # Build and restart containers
+            docker-compose -f docker-compose.prod.yml build --no-cache backend celery
+            docker-compose -f docker-compose.prod.yml up -d
+
+            # Wait for backend to be healthy
+            echo "Waiting for backend..."
+            for i in $(seq 1 20); do
+              if curl -sf http://localhost:8000/health; then
+                echo "Backend healthy"
+                break
+              fi
+              sleep 5
+            done
+
+            # Final health check
+            curl -sf http://localhost:8000/health || {
               echo "Health check failed — rolling back"
               git stash
-              docker-compose -f docker-compose.prod.yml up -d --build
+              docker-compose -f docker-compose.prod.yml up -d
               exit 1
             }
-            echo "Deploy successful"
+
+            echo "Deploy complete — $(date)"

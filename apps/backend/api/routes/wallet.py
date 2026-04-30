@@ -33,6 +33,10 @@ class WithdrawRequest(BaseModel):
     reason: str = "personal withdrawal"
 
 
+class SetTopupRequest(BaseModel):
+    amount: float  # new monthly topup amount in INR
+
+
 @router.get("/summary")
 async def wallet_summary(
     db: AsyncSession = Depends(get_db),
@@ -84,6 +88,35 @@ async def apply_topup(
 ):
     """Manually trigger monthly top-up (normally called by Celery beat)."""
     return await get_wallet_service().apply_monthly_topup(db)
+
+
+@router.post("/topup/set-amount")
+async def set_topup_amount(
+    request: SetTopupRequest,
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Change the monthly auto-topup amount.
+    Example: if you start earning ₹2,000/month, set this to 2000.
+    Takes effect from next month's 1st.
+    """
+    if request.amount < 0:
+        raise HTTPException(status_code=422, detail="Topup amount cannot be negative")
+    wallet = await get_wallet_service().get_or_create(db)
+    old_amount = wallet.monthly_topup
+    wallet.monthly_topup = request.amount
+    await db.commit()
+    return {
+        "old_monthly_topup": old_amount,
+        "new_monthly_topup": request.amount,
+        "message": (
+            f"Monthly topup updated from ₹{old_amount:.0f} to ₹{request.amount:.0f}. "
+            f"Takes effect on the 1st of next month."
+            if request.amount > 0
+            else "Monthly auto-topup disabled. You can re-enable it anytime."
+        ),
+    }
 
 
 @router.post("/withdraw")
