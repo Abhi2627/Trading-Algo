@@ -21,13 +21,17 @@ class Settings(BaseSettings):
     NVIDIA_NIM_API_KEY: str = ""
     NVIDIA_NIM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.2:3b"
+    OLLAMA_MODEL: str = "llama3:latest"
+    # Groq API (replaces Ollama in cloud deployment)
+    GROQ_API_KEY: str = ""
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
 
     # Market data
     YFINANCE_DELAY_MINUTES: int = 15
 
     # Wallet defaults
-    DEFAULT_INITIAL_CAPITAL: float = 10000.0
+    DEFAULT_INITIAL_CAPITAL: float = 2000.0
     DEFAULT_MONTHLY_TOPUP: float = 1000.0
     MAX_DAILY_LOSS_PCT: float = 0.02
     DAILY_PROFIT_TARGET_PCT: float = 0.015
