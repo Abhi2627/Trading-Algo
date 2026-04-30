@@ -36,37 +36,26 @@ class SentimentService:
         result = await svc.analyse(["headline 1", "headline 2"], symbol="NSE:RELIANCE")
     """
 
-    async def analyse(
-        self,
-        headlines: list[str],
-        symbol: str = "",
-    ) -> dict:
-        """
-        Score sentiment from a list of headlines.
-
-        Returns:
-            {
-              "score":        float (-1 to +1)
-              "magnitude":    float (0 to 1)
-              "direction":    "bullish" | "bearish" | "neutral"
-              "key_factors":  list[str]
-              "time_horizon": str
-              "source":       "nim" | "ollama" | "fallback"
-            }
-        """
+    async def analyse(self, headlines: list[str], symbol: str = "") -> dict:
         if not headlines:
             return self._neutral("no headlines provided")
 
         prompt = self._build_prompt(headlines, symbol)
 
-        # Try NIM first
-        if settings.NVIDIA_NIM_API_KEY:
+        # Priority order: Groq → NIM → Ollama → fallback
+        if settings.GROQ_API_KEY and settings.GROQ_API_KEY not in ('', 'PASTE_YOUR_NEW_KEY_HERE'):
+            result = await self._call_groq(prompt)
+            if result:
+                result["source"] = "groq"
+                return result
+
+        if settings.NVIDIA_NIM_API_KEY and settings.NVIDIA_NIM_API_KEY not in ('', 'your-nim-key-here'):
             result = await self._call_nim(prompt)
             if result:
                 result["source"] = "nim"
                 return result
 
-        # Fallback to Ollama
+        # Local Ollama fallback
         result = await self._call_ollama(prompt)
         if result:
             result["source"] = "ollama"
@@ -81,6 +70,33 @@ class SentimentService:
             f"based on these recent headlines:\n\n{headlines_text}\n\n"
             f"Return only the JSON object."
         )
+
+    async def _call_groq(self, prompt: str) -> Optional[dict]:
+        """Call Groq API (OpenAI-compatible, free tier, fast inference)."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{settings.GROQ_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model": settings.GROQ_MODEL,
+                        "messages": [
+                            {"role": "system", "content": SENTIMENT_SYSTEM_PROMPT},
+                            {"role": "user",   "content": prompt},
+                        ],
+                        "max_tokens":  300,
+                        "temperature": 0.1,
+                    },
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+                return self._parse_json(content)
+        except Exception as e:
+            logger.warning(f"Groq API call failed: {e}")
+            return None
 
     async def _call_nim(self, prompt: str) -> Optional[dict]:
         """Call NVIDIA NIM API (OpenAI-compatible endpoint)."""

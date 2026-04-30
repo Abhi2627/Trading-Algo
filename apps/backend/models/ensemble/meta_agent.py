@@ -12,6 +12,53 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_URL   = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3:latest"
+GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
+
+
+async def _call_llm(prompt: str) -> Optional[dict]:
+    """Call Groq first, fall back to Ollama if unavailable."""
+    from core.config import settings
+
+    # Try Groq first (cloud, fast, free tier)
+    if settings.GROQ_API_KEY and settings.GROQ_API_KEY not in ('', 'PASTE_YOUR_NEW_KEY_HERE'):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+                    json={
+                        "model":    settings.GROQ_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens":  80,
+                        "temperature": 0.1,
+                    },
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"]
+                match = re.search(r'\{[^}]+\}', raw)
+                if match:
+                    return json.loads(match.group())
+        except Exception as e:
+            logger.warning(f"Meta-Agent Groq failed: {e} — trying Ollama")
+
+    # Fall back to local Ollama
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(OLLAMA_URL, json={
+                "model":  OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 60},
+            })
+            resp.raise_for_status()
+            raw   = resp.json().get("response", "")
+            match = re.search(r'\{[^}]+\}', raw)
+            if match:
+                return json.loads(match.group())
+    except Exception as e:
+        logger.warning(f"Meta-Agent Ollama failed: {e}")
+
+    return None
 
 # Hardcoded fallback weights — used when Meta-Agent fails
 FALLBACK_WEIGHTS = {
@@ -116,31 +163,8 @@ Respond with ONLY JSON, no explanation:
 {{"rl": 0.XX, "transformer": 0.XX, "sentiment": 0.XX}}"""
 
     async def _call_ollama(self, prompt: str) -> Optional[dict]:
-        """Call Ollama and extract JSON weights from response."""
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(OLLAMA_URL, json={
-                "model":  OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.1,  # low = consistent output
-                    "num_predict": 60,   # only need short JSON
-                },
-            })
-            resp.raise_for_status()
-            raw = resp.json().get("response", "")
-
-        # Extract JSON object from response
-        match = re.search(r'\{[^}]+\}', raw)
-        if not match:
-            logger.warning(f"Meta-Agent: no JSON in response: {raw[:120]}")
-            return None
-
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            logger.warning(f"Meta-Agent: JSON parse failed: {match.group()}")
-            return None
+        """Call LLM — tries Groq first, falls back to Ollama."""
+        return await _call_llm(prompt)
 
     def _validate(self, weights: dict) -> bool:
         """Validate and normalise weights."""

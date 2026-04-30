@@ -103,11 +103,11 @@ class PaperWallet(Base):
     __tablename__ = "paper_wallet"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    cash_balance: Mapped[float] = mapped_column(Float, default=10000.0)
+    cash_balance: Mapped[float] = mapped_column(Float, default=2000.0)
     invested_balance: Mapped[float] = mapped_column(Float, default=0.0)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     unrealized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
-    peak_equity: Mapped[float] = mapped_column(Float, default=10000.0)
+    peak_equity: Mapped[float] = mapped_column(Float, default=2000.0)
     monthly_topup: Mapped[float] = mapped_column(Float, default=1000.0)
     risk_mode: Mapped[RiskMode] = mapped_column(SAEnum(RiskMode), default=RiskMode.normal)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=_now)

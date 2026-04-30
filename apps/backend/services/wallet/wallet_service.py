@@ -11,6 +11,7 @@ from core.models import (
 )
 from services.wallet.risk_manager import get_risk_manager
 from services.market_data.fetcher import fetch_latest_price
+from services.wallet.charges import compute_charges, charges_preview
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +169,33 @@ class WalletService:
         if not decision.approved:
             return {"approved": False, "reason": decision.reason}
 
-        # Debit cash
-        wallet.cash_balance     -= decision.position_size
-        wallet.invested_balance += decision.position_size
+        # Debit cash including buy-side charges
+        buy_charges = compute_charges(decision.quantity, current_price, is_buy=True)
+        total_debit  = decision.position_size + buy_charges.total
+
+        # Safety: check cash covers position + charges
+        if total_debit > wallet.cash_balance:
+            return {
+                "approved": False,
+                "reason": (
+                    f"Insufficient cash for position + charges. "
+                    f"Need \u20b9{total_debit:.2f} "
+                    f"(\u20b9{decision.position_size:.2f} + \u20b9{buy_charges.total:.2f} charges), "
+                    f"have \u20b9{wallet.cash_balance:.2f}"
+                ),
+            }
+
+        wallet.cash_balance     = round(max(0.0, wallet.cash_balance - total_debit), 2)
+        wallet.invested_balance = round(wallet.invested_balance + decision.position_size, 2)
         if wallet.total_equity > wallet.peak_equity:
-            wallet.peak_equity = wallet.total_equity
+            wallet.peak_equity = round(wallet.total_equity, 2)
         wallet.risk_mode = wallet.compute_risk_mode()
+
+        # Charges preview for response (TP and SL scenarios)
+        preview = charges_preview(
+            decision.quantity, current_price,
+            decision.stop_loss, decision.take_profit,
+        )
 
         # Create trade record
         trade = Trade(
@@ -191,28 +213,39 @@ class WalletService:
         )
         db.add(trade)
 
-        # Log transaction
+        # Log transaction including charges
         db.add(WalletTransaction(
             wallet_id=wallet.id,
             type=TransactionType.trade_open,
-            amount=-decision.position_size,
+            amount=-total_debit,
             balance_after=wallet.cash_balance,
-            description=f"BUY {decision.quantity} {asset_symbol} @ ₹{current_price}",
+            description=(
+                f"BUY {decision.quantity} {asset_symbol} @ ₹{current_price:.2f} "
+                f"| Charges ₹{buy_charges.total:.2f} "
+                f"(STT ₹{buy_charges.stt:.2f} + Brok ₹{buy_charges.brokerage:.2f} + GST ₹{buy_charges.gst:.2f})"
+            ),
         ))
 
         await db.flush()
-        logger.info(f"Trade opened: {asset_symbol} qty={decision.quantity} @ ₹{current_price}")
+        logger.info(
+            f"Trade opened: {asset_symbol} qty={decision.quantity} "
+            f"@ ₹{current_price:.2f} | charges=₹{buy_charges.total:.2f} "
+            f"| cash=₹{wallet.cash_balance:.2f}"
+        )
 
         return {
-            "approved":      True,
-            "trade_id":      str(trade.id),
-            "symbol":        asset_symbol,
-            "quantity":      decision.quantity,
-            "entry_price":   current_price,
-            "position_size": decision.position_size,
-            "stop_loss":     decision.stop_loss,
-            "take_profit":   decision.take_profit,
-            "cash_remaining":round(wallet.cash_balance, 2),
+            "approved":        True,
+            "trade_id":        str(trade.id),
+            "symbol":          asset_symbol,
+            "quantity":        decision.quantity,
+            "entry_price":     current_price,
+            "position_size":   decision.position_size,
+            "stop_loss":       decision.stop_loss,
+            "take_profit":     decision.take_profit,
+            "cash_remaining":  round(wallet.cash_balance, 2),
+            "risk_mode":       wallet.risk_mode.value,
+            "buy_charges":     buy_charges.as_dict(),
+            "charges_preview": preview,
         }
 
     async def close_trade(
@@ -237,44 +270,60 @@ class WalletService:
         if trade.status != TradeStatus.open:
             return {"error": f"Trade {trade_id} is already {trade.status.value}"}
 
-        exit_price = fetch_latest_price(asset.symbol) or trade.entry_price
-        pnl        = (exit_price - trade.entry_price) * trade.quantity
-        proceeds   = exit_price * trade.quantity
+        exit_price   = fetch_latest_price(asset.symbol) or trade.entry_price
+        sell_charges = compute_charges(trade.quantity, exit_price, is_buy=False)
+        gross_pnl    = (exit_price - trade.entry_price) * trade.quantity
+        net_pnl      = gross_pnl - sell_charges.total  # sell-side charges only here
+        # Buy-side charges were already deducted when trade was opened
+        proceeds     = (exit_price * trade.quantity) - sell_charges.total
 
         # Update trade
         trade.exit_price   = exit_price
         trade.exit_time    = datetime.now(timezone.utc)
         trade.status       = TradeStatus.closed
-        trade.realized_pnl = round(pnl, 2)
+        trade.realized_pnl = round(net_pnl, 2)  # net after sell charges
         trade.notes        = reason
 
-        # Update wallet
-        wallet.cash_balance     += proceeds
-        wallet.invested_balance  = max(0.0, wallet.invested_balance - trade.capital_used)
-        wallet.realized_pnl     += pnl
+        # Fix invested_balance: use position_size directly, not capital_used property
+        # capital_used can return 0 if both intraday/positional fields are None
+        invested_release = trade.positional_capital_used or trade.intraday_capital_used or 0.0
+
+        wallet.cash_balance     = round(wallet.cash_balance + proceeds, 2)
+        wallet.invested_balance = round(max(0.0, wallet.invested_balance - invested_release), 2)
+        wallet.realized_pnl     = round(wallet.realized_pnl + net_pnl, 2)
         if wallet.total_equity > wallet.peak_equity:
-            wallet.peak_equity = wallet.total_equity
+            wallet.peak_equity  = round(wallet.total_equity, 2)
         wallet.risk_mode = wallet.compute_risk_mode()
 
         db.add(WalletTransaction(
             wallet_id=wallet.id,
             type=TransactionType.trade_close,
-            amount=proceeds,
+            amount=round(proceeds, 2),
             balance_after=wallet.cash_balance,
-            description=f"SELL {trade.quantity} {asset.symbol} @ ₹{exit_price} (P&L: ₹{pnl:+.2f})",
+            description=(
+                f"SELL {trade.quantity} {asset.symbol} @ ₹{exit_price:.2f} "
+                f"| Gross P&L ₹{gross_pnl:+.2f} "
+                f"| Sell charges ₹{sell_charges.total:.2f} "
+                f"| Net P&L ₹{net_pnl:+.2f}"
+            ),
         ))
 
         await db.flush()
-        logger.info(f"Trade closed: {asset.symbol} pnl=₹{pnl:+.2f}")
+        logger.info(
+            f"Trade closed: {asset.symbol} "
+            f"gross=₹{gross_pnl:+.2f} charges=₹{sell_charges.total:.2f} net=₹{net_pnl:+.2f}"
+        )
 
         return {
-            "trade_id":    str(trade.id),
-            "symbol":      asset.symbol,
-            "exit_price":  exit_price,
-            "realized_pnl":round(pnl, 2),
-            "pnl_pct":     round((exit_price - trade.entry_price) / trade.entry_price * 100, 2),
-            "total_equity":round(wallet.total_equity, 2),
-            "risk_mode":   wallet.risk_mode.value,
+            "trade_id":      str(trade.id),
+            "symbol":        asset.symbol,
+            "exit_price":    exit_price,
+            "gross_pnl":     round(gross_pnl, 2),
+            "sell_charges":  sell_charges.as_dict(),
+            "net_pnl":       round(net_pnl, 2),
+            "pnl_pct":       round((exit_price - trade.entry_price) / trade.entry_price * 100, 2),
+            "total_equity":  round(wallet.total_equity, 2),
+            "risk_mode":     wallet.risk_mode.value,
         }
 
     # ------------------------------------------------------------------ #
