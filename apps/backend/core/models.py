@@ -110,6 +110,7 @@ class PaperWallet(Base):
     peak_equity: Mapped[float] = mapped_column(Float, default=2000.0)
     monthly_topup: Mapped[float] = mapped_column(Float, default=1000.0)
     risk_mode: Mapped[RiskMode] = mapped_column(SAEnum(RiskMode), default=RiskMode.normal)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)  # stores bank account info
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

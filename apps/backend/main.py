@@ -11,6 +11,7 @@ from api.routes.assets import router as assets_router
 from api.routes.signals import router as signals_router
 from api.routes.wallet import router as wallet_router
 from api.routes.chat import router as chat_router
+from api.routes.emergency import router as emergency_router
 
 
 @asynccontextmanager
@@ -55,3 +56,4 @@ app.include_router(assets_router)
 app.include_router(signals_router)
 app.include_router(wallet_router)
 app.include_router(chat_router)
+app.include_router(emergency_router)
