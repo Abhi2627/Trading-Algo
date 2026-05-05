@@ -1,1 +1,1 @@
-#AI Trading Platform
+# AlgoTrade - AI Paper Trading Platform
