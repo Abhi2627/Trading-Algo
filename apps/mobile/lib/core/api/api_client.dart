@@ -6,7 +6,7 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String _defaultBaseUrl = 'http://10.27.204.58:8000'; // Mac LAN IP for S23 device
+const String _defaultBaseUrl = 'http://139.59.23.105:8000'; // Mac LAN IP for S23 device
 const String _prefKeyApiKey  = 'api_key';
 const String _prefKeyBaseUrl = 'base_url';
 
