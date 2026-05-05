@@ -16,7 +16,7 @@ redis==5.0.8
 yfinance==0.2.43
 pandas==2.2.3
 numpy==1.26.4
-pandas-ta-remake
+pandas-ta
 scikit-learn==1.5.2
 # torch installed separately in Dockerfile with CPU-only build
 stable-baselines3==2.3.2
@@ -34,6 +34,9 @@ openai==1.51.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-jose==3.3.0
+
+# HTTP client (for Groq/Ollama)
+httpx>=0.27.0
 
 # Testing
 pytest==8.3.3
