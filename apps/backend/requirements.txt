@@ -16,9 +16,9 @@ redis==5.0.8
 yfinance==0.2.43
 pandas==2.2.3
 numpy==1.26.4
-pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@development
+pandas-ta
 scikit-learn==1.5.2
-torch==2.4.1
+# torch installed separately in Dockerfile with CPU-only build
 stable-baselines3==2.3.2
 gymnasium==0.29.1
 
