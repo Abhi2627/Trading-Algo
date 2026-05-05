@@ -16,7 +16,7 @@ redis==5.0.8
 yfinance==0.2.43
 pandas==2.2.3
 numpy==1.26.4
-pandas-ta==0.3.14b
+pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@development
 scikit-learn==1.5.2
 torch==2.4.1
 stable-baselines3==2.3.2
