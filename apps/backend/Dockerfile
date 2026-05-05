@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc git libpq-dev curl \
@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install CPU-only PyTorch first (smaller, no CUDA bloat)
+# Install CPU-only PyTorch (no CUDA needed for inference)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         torch==2.4.1 \
