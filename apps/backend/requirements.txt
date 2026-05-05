@@ -14,10 +14,10 @@ redis==5.0.8
 
 # Data & ML
 yfinance==0.2.43
-pandas==2.2.3
-numpy==1.26.4
+pandas>=2.2.3
+numpy>=1.26.4
 pandas-ta
-scikit-learn==1.5.2
+scikit-learn>=1.5.2
 stable-baselines3==2.3.2
 gymnasium==0.29.1
 
