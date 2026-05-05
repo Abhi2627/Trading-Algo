@@ -16,6 +16,7 @@ redis==5.0.8
 yfinance==0.2.43
 pandas==2.2.3
 numpy==1.26.4
+pandas-ta-remake
 scikit-learn==1.5.2
 # torch installed separately in Dockerfile with CPU-only build
 stable-baselines3==2.3.2

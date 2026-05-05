@@ -14,10 +14,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
         torch==2.4.1 \
         --index-url https://download.pytorch.org/whl/cpu
 
-# Install pandas-ta from git (no PyPI release for Python 3.11)
-RUN pip install --no-cache-dir \
-    git+https://github.com/twopirllc/pandas-ta.git@development
-
 # Install remaining dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
