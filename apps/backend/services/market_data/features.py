@@ -4,7 +4,7 @@
 # Never add model logic here — only feature computation.
 import pandas as pd
 import numpy as np
-import pandas_ta_classic as ta
+import pandas_ta as ta
 from typing import Optional
 import logging
 
