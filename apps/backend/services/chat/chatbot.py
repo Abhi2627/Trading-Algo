@@ -227,39 +227,38 @@ class Chatbot:
         user_prompt: str,
         history: list[dict],
     ) -> str:
-        """Call NIM API with conversation history. Falls back to Ollama."""
+        """Call Groq → Ollama → fallback message."""
         from core.config import settings
         import httpx
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            *history[-6:],    # keep last 3 turns (6 messages) for context
+            *history[-6:],
             {"role": "user", "content": user_prompt},
         ]
 
-        # Try NIM first
-        if settings.NVIDIA_NIM_API_KEY:
+        # Try Groq first (works in cloud)
+        if settings.GROQ_API_KEY and settings.GROQ_API_KEY not in ('', 'PASTE_YOUR_NEW_KEY_HERE'):
             try:
                 async with httpx.AsyncClient(timeout=20.0) as client:
                     resp = await client.post(
-                        f"{settings.NVIDIA_NIM_BASE_URL}/chat/completions",
-                        headers={"Authorization": f"Bearer {settings.NVIDIA_NIM_API_KEY}"},
+                        f"{settings.GROQ_BASE_URL}/chat/completions",
+                        headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
                         json={
-                            "model":       "mistralai/mistral-small-4-119b-2603",
+                            "model":       settings.GROQ_MODEL,
                             "messages":    messages,
-                            "max_tokens":  300,
+                            "max_tokens":  400,
                             "temperature": 0.2,
                         },
                     )
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"].strip()
             except Exception as e:
-                logger.warning(f"NIM chat failed: {e}")
+                logger.warning(f"Groq chat failed: {e}")
 
-        # Fallback to Ollama
+        # Fallback to local Ollama
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                # Flatten history into a single prompt for Ollama
                 flat = "\n".join(
                     f"{m['role'].upper()}: {m['content']}" for m in messages
                 )
@@ -269,7 +268,7 @@ class Chatbot:
                         "model":  settings.OLLAMA_MODEL,
                         "prompt": flat + "\nASSISTANT:",
                         "stream": False,
-                        "options": {"temperature": 0.2, "num_predict": 300},
+                        "options": {"temperature": 0.2, "num_predict": 400},
                     },
                 )
                 resp.raise_for_status()
