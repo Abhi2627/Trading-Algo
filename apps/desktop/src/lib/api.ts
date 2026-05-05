@@ -6,7 +6,23 @@ const api = axios.create({
     'X-API-Key': import.meta.env.VITE_API_KEY,
     'Content-Type': 'application/json',
   },
+  timeout: 120000, // 2 minutes — signal generation + yfinance can take 30-60s
 });
+
+// Retry failed requests once (network hiccups)
+api.interceptors.response.use(
+  response => response,
+  async error => {
+    const config = error.config;
+    if (!config || config._retry) return Promise.reject(error);
+    if (error.code === 'ECONNABORTED' || error.response?.status >= 500) {
+      config._retry = true;
+      await new Promise(r => setTimeout(r, 2000));
+      return api(config);
+    }
+    return Promise.reject(error);
+  }
+);
 
 // ---------------------------------------------------------------------------
 // Response interfaces — must match FastAPI response shapes exactly

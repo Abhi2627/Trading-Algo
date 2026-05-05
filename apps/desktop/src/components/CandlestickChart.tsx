@@ -25,7 +25,9 @@ const CandlestickChart: React.FC<Props> = ({ symbol, entryPrice, stopLoss, takeP
   const { data, isLoading, isError } = useQuery({
     queryKey: ['ohlcv', symbol, period],
     queryFn:  () => getOHLCV(symbol, period),
-    staleTime: 5 * 60 * 1000,  // 5 min cache
+    staleTime: 30 * 60 * 1000,  // 30 min cache — price data doesn't change that fast
+    retry: 1,
+    retryDelay: 3000,
   });
 
   const candles = data?.candles ?? [];
