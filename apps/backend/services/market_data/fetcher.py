@@ -62,13 +62,13 @@ def _fetch_nse_historical(symbol: str, period_days: int = 730) -> Optional[pd.Da
     start_date = end_date - timedelta(days=min(period_days, 730))
 
     try:
-        data = nse.equityHistory(
+        data = nse.fetch_equity_historical_data(
             ticker,
-            start=datetime.combine(start_date, datetime.min.time()),
-            end=datetime.combine(end_date,   datetime.min.time()),
+            from_date=start_date,
+            to_date=end_date,
         )
 
-        if not data or len(data) == 0:
+        if data is None or (hasattr(data, '__len__') and len(data) == 0):
             logger.warning(f"NSE: no history for {symbol}")
             return None
 
@@ -76,12 +76,12 @@ def _fetch_nse_historical(symbol: str, period_days: int = 730) -> Optional[pd.Da
         for item in data:
             try:
                 rows.append({
-                    'datetime': pd.to_datetime(item.get('CH_TIMESTAMP') or item.get('TIMESTAMP')),
-                    'open':     float(item.get('CH_OPENING_PRICE') or item.get('OPEN', 0)),
-                    'high':     float(item.get('CH_TRADE_HIGH_PRICE') or item.get('HIGH', 0)),
-                    'low':      float(item.get('CH_TRADE_LOW_PRICE') or item.get('LOW', 0)),
-                    'close':    float(item.get('CH_CLOSING_PRICE') or item.get('CLOSE', 0)),
-                    'volume':   float(item.get('CH_TOT_TRADED_QTY') or item.get('VOLUME', 0)),
+                    'datetime': pd.to_datetime(item['mtimestamp'], dayfirst=True),
+                    'open':     float(item['chOpeningPrice']),
+                    'high':     float(item['chTradeHighPrice']),
+                    'low':      float(item['chTradeLowPrice']),
+                    'close':    float(item['chClosingPrice']),
+                    'volume':   float(item['chTotTradedQty']),
                 })
             except Exception:
                 continue
@@ -89,7 +89,9 @@ def _fetch_nse_historical(symbol: str, period_days: int = 730) -> Optional[pd.Da
         if not rows:
             return None
 
-        df = pd.DataFrame(rows).set_index('datetime').sort_index()
+        df = pd.DataFrame(rows)
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = df.set_index('datetime').sort_index()
         df = df.dropna(subset=['close'])
         df['volume'] = df['volume'].fillna(0)
 
