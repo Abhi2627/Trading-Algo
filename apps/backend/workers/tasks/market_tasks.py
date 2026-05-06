@@ -37,12 +37,13 @@ async def _scan_all_assets_async() -> dict:
     if _root not in sys.path:
         sys.path.insert(0, _root)
 
-    from core.database import AsyncSessionLocal
+    from core.database import AsyncSessionLocal, init_db
     from core.models import Asset, AssetType
     from sqlalchemy import select
     from services.market_data.signal_pipeline import generate_signal
     from services.news.news_fetcher import clear_cache, fetch_global_headlines
 
+    await init_db()
     clear_cache()
     await fetch_global_headlines()
     logger.info("News headlines pre-fetched for morning scan")
@@ -117,11 +118,13 @@ async def _auto_execute_async() -> dict:
         sys.path.insert(0, _root)
 
     from datetime import datetime, timezone, timedelta, date
-    from core.database import AsyncSessionLocal
+    from core.database import AsyncSessionLocal, init_db
     from core.models import Signal, Asset, SignalAction, Trade, TradeStatus, RiskMode
     from sqlalchemy import select, desc
     from services.wallet.wallet_service import get_wallet_service
     from services.wallet.risk_manager import get_capital_tier
+
+    await init_db()
 
     results = {
         "executed":  [],

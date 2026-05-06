@@ -126,8 +126,16 @@ celery_app.conf.beat_schedule = {
 def run_async(coro):
     """
     Run an async coroutine from a synchronous Celery task.
-    Celery tasks are sync; all our services are async.
-    Creates a fresh event loop per task call.
+    Uses a fresh event loop per call to avoid asyncpg loop conflicts.
     """
     import asyncio
-    return asyncio.run(coro)
+    # Create a brand new event loop — never reuse
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        # Close all pending async generators
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+        asyncio.set_event_loop(None)
