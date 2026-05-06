@@ -32,7 +32,6 @@ const Settings: React.FC = () => {
     import.meta.env.VITE_API_KEY || 'abhay-algotrade-2025'
   );
   const [status, setStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
-  const [_saved, setSaved] = useState(false);
 
   const testConnection = async () => {
     setStatus('checking');

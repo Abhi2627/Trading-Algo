@@ -1,4 +1,5 @@
 // features/dashboard/dashboard_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/endpoints.dart';
@@ -32,11 +33,40 @@ String _inr(double v) {
   return '₹${v.toStringAsFixed(0)}';
 }
 
-class DashboardScreen extends ConsumerWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  Timer? _walletTimer;
+  Timer? _signalsTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresh wallet every 15 seconds
+    _walletTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      ref.invalidate(walletProvider);
+      ref.invalidate(marketStatusProvider);
+    });
+    // Refresh signals every 60 seconds
+    _signalsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      ref.invalidate(dashboardSignalsProvider);
+    });
+  }
+
+  @override
+  void dispose() {
+    _walletTimer?.cancel();
+    _signalsTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final walletAsync  = ref.watch(walletProvider);
     final signalsAsync = ref.watch(dashboardSignalsProvider);
 
