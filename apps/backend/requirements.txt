@@ -21,6 +21,11 @@ scikit-learn>=1.5.2
 stable-baselines3==2.3.2
 gymnasium==0.29.1
 
+# NSE India data (works from cloud servers)
+nse @ git+https://github.com/BennyThadikaran/NseIndiaApi.git
+mthrottle>=0.0.1
+httpx[http2]>=0.27.0
+
 # Task scheduling
 celery[redis]==5.4.0
 django-celery-beat==2.7.0

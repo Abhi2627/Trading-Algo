@@ -1,37 +1,32 @@
 # services/market_data/fetcher.py
 # Downloads OHLCV data for NSE stocks.
-# Primary: NSE India API (works from datacenter IPs)
+# Primary: NseIndiaApi (works from cloud/datacenter IPs via HTTP/2)
 # Fallback: yfinance (works from residential IPs)
 import pandas as pd
-import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 import logging
+import tempfile
+import os
 
 logger = logging.getLogger(__name__)
 
-# NSE session — reuse for all requests
-_nse_session: Optional[requests.Session] = None
+# NseIndia session — singleton
+_nse: Optional[object] = None
+_nse_dir = tempfile.mkdtemp(prefix='nse_')
 
-def _get_nse_session() -> requests.Session:
-    global _nse_session
-    if _nse_session is None:
-        _nse_session = requests.Session()
-        _nse_session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': 'https://www.nseindia.com/',
-            'Connection': 'keep-alive',
-        })
-        # Warm up session with homepage visit
+
+def _get_nse():
+    global _nse
+    if _nse is None:
         try:
-            _nse_session.get('https://www.nseindia.com', timeout=10)
-        except Exception:
-            pass
-    return _nse_session
+            from nse import NSE
+            _nse = NSE(_nse_dir, server=True)
+            logger.info("NseIndiaApi initialised (server mode)")
+        except Exception as e:
+            logger.warning(f"NseIndiaApi init failed: {e}")
+    return _nse
 
 
 def to_yf_symbol(symbol: str) -> str:
@@ -45,7 +40,6 @@ def to_yf_symbol(symbol: str) -> str:
 
 
 def _nse_ticker(symbol: str) -> str:
-    """Extract NSE ticker from internal symbol."""
     if ":" in symbol:
         return symbol.split(":", 1)[1]
     return symbol
@@ -53,76 +47,62 @@ def _nse_ticker(symbol: str) -> str:
 
 def _fetch_nse_historical(symbol: str, period_days: int = 730) -> Optional[pd.DataFrame]:
     """
-    Fetch historical OHLCV from NSE India API.
-    NSE provides up to 2 years of daily data.
+    Fetch historical OHLCV from NSE India via NseIndiaApi.
+    Works from datacenter/cloud IPs.
     """
-    ticker = _nse_ticker(symbol)
     if not symbol.startswith("NSE:"):
         return None
 
-    session  = _get_nse_session()
-    end_date = datetime.now()
+    ticker = _nse_ticker(symbol)
+    nse    = _get_nse()
+    if nse is None:
+        return None
+
+    end_date   = date.today()
     start_date = end_date - timedelta(days=min(period_days, 730))
 
-    url = (
-        f"https://www.nseindia.com/api/historical/cm/equity"
-        f"?symbol={ticker}"
-        f"&series=[%22EQ%22]"
-        f"&from={start_date.strftime('%d-%m-%Y')}"
-        f"&to={end_date.strftime('%d-%m-%Y')}"
-        f"&csv=true"
-    )
-
     try:
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
+        data = nse.equityHistory(
+            ticker,
+            start=datetime.combine(start_date, datetime.min.time()),
+            end=datetime.combine(end_date,   datetime.min.time()),
+        )
 
-        from io import StringIO
-        df = pd.read_csv(StringIO(resp.text))
-
-        if df.empty:
+        if not data or len(data) == 0:
+            logger.warning(f"NSE: no history for {symbol}")
             return None
 
-        # NSE column names vary — handle both formats
-        col_map = {}
-        for col in df.columns:
-            cl = col.strip().lower()
-            if 'date' in cl:   col_map[col] = 'datetime'
-            elif cl in ('open',):  col_map[col] = 'open'
-            elif cl in ('high',):  col_map[col] = 'high'
-            elif cl in ('low',):   col_map[col] = 'low'
-            elif 'close' in cl and 'prev' not in cl: col_map[col] = 'close'
-            elif 'volume' in cl or 'trdqty' in cl:  col_map[col] = 'volume'
+        rows = []
+        for item in data:
+            try:
+                rows.append({
+                    'datetime': pd.to_datetime(item.get('CH_TIMESTAMP') or item.get('TIMESTAMP')),
+                    'open':     float(item.get('CH_OPENING_PRICE') or item.get('OPEN', 0)),
+                    'high':     float(item.get('CH_TRADE_HIGH_PRICE') or item.get('HIGH', 0)),
+                    'low':      float(item.get('CH_TRADE_LOW_PRICE') or item.get('LOW', 0)),
+                    'close':    float(item.get('CH_CLOSING_PRICE') or item.get('CLOSE', 0)),
+                    'volume':   float(item.get('CH_TOT_TRADED_QTY') or item.get('VOLUME', 0)),
+                })
+            except Exception:
+                continue
 
-        df = df.rename(columns=col_map)
-        needed = ['datetime', 'open', 'high', 'low', 'close', 'volume']
-        missing = [c for c in needed if c not in df.columns]
-        if missing:
-            logger.warning(f"NSE data missing columns {missing} for {symbol}")
+        if not rows:
             return None
 
-        df = df[needed].copy()
-        df['datetime'] = pd.to_datetime(df['datetime'], dayfirst=True)
-        df = df.set_index('datetime').sort_index()
-
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(',', ''), errors='coerce'
-            )
-
+        df = pd.DataFrame(rows).set_index('datetime').sort_index()
         df = df.dropna(subset=['close'])
         df['volume'] = df['volume'].fillna(0)
 
-        logger.info(f"NSE API: {len(df)} rows for {symbol}")
+        logger.info(f"NSE: {len(df)} rows for {symbol}")
         return df
 
     except Exception as e:
-        logger.warning(f"NSE historical fetch failed for {symbol}: {e}")
+        logger.warning(f"NSE history failed for {symbol}: {e}")
         return None
 
 
 def _fetch_yfinance_historical(symbol: str, period_days: int, interval: str) -> Optional[pd.DataFrame]:
-    """Fallback: fetch from yfinance (works on residential IPs)."""
+    """Fallback: yfinance (works on residential IPs)."""
     try:
         import yfinance as yf
         yf_symbol = to_yf_symbol(symbol)
@@ -159,41 +139,32 @@ def fetch_historical(
     interval: str = "1d",
 ) -> Optional[pd.DataFrame]:
     """
-    Download historical OHLCV. Tries NSE API first, falls back to yfinance.
+    Download historical OHLCV.
+    Tries NseIndiaApi first (cloud-compatible), falls back to yfinance.
     """
-    # Try NSE API first (works from datacenter IPs)
     if symbol.startswith("NSE:") and interval == "1d":
         df = _fetch_nse_historical(symbol, period_days)
-        if df is not None and len(df) >= 60:
+        if df is not None and len(df) >= 30:
             return df
-        time.sleep(0.5)  # Rate limit protection
+        time.sleep(0.3)
 
-    # Fallback to yfinance
     return _fetch_yfinance_historical(symbol, period_days, interval)
 
 
 def fetch_latest_price(symbol: str) -> Optional[float]:
-    """
-    Get most recent price. Uses NSE quote API for real-time data.
-    """
-    # Try NSE quote API first
+    """Get most recent price using NSE quote API."""
     if symbol.startswith("NSE:"):
         ticker = _nse_ticker(symbol)
-        try:
-            session = _get_nse_session()
-            resp = session.get(
-                f"https://www.nseindia.com/api/quote-equity?symbol={ticker}",
-                timeout=10
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            price = data.get("priceInfo", {}).get("lastPrice")
-            if price:
-                return float(price)
-        except Exception as e:
-            logger.warning(f"NSE quote failed for {symbol}: {e}")
+        nse    = _get_nse()
+        if nse:
+            try:
+                data  = nse.quote(ticker)
+                price = data.get("priceInfo", {}).get("lastPrice")
+                if price:
+                    return float(price)
+            except Exception as e:
+                logger.warning(f"NSE quote failed for {symbol}: {e}")
 
-    # Fallback: get from historical
     df = fetch_historical(symbol, period_days=5, interval="1d")
     if df is not None and not df.empty:
         return float(df["close"].iloc[-1])
@@ -205,5 +176,5 @@ def fetch_batch_latest_prices(symbols: list[str]) -> dict[str, Optional[float]]:
     results = {}
     for symbol in symbols:
         results[symbol] = fetch_latest_price(symbol)
-        time.sleep(0.1)  # Avoid rate limiting
+        time.sleep(0.1)
     return results
