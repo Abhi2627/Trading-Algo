@@ -1,10 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Default capabilities for AlgoTrade",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "http:default",
+    {
+      "identifier": "http:allow-fetch",
+      "allow": [
+        { "url": "http://139.59.23.105:8000/**" },
+        { "url": "http://localhost:8000/**" }
+      ]
+    }
   ]
 }
