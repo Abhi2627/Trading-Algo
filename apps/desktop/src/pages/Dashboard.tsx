@@ -74,7 +74,7 @@ const Dashboard: React.FC = () => {
       <div className="h-full flex flex-col items-center justify-center text-center">
         <AlertCircle size={48} className="text-red mb-4" />
         <h2 className="text-xl font-bold mb-2">Failed to fetch data</h2>
-        <p className="text-text-secondary">Make sure the backend is running at http://localhost:8000</p>
+        <p className="text-text-secondary">Make sure the backend is running</p>
       </div>
     );
   }
