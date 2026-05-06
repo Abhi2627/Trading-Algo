@@ -34,7 +34,8 @@ const Dashboard: React.FC = () => {
   } = useQuery({
     queryKey: queryKeys.wallet,
     queryFn: getWalletSummary,
-    refetchInterval: 5000,
+    refetchInterval: 15000,   // refresh every 15 seconds
+    placeholderData: (prev) => prev,  // keep showing old data while refreshing
   });
 
   const { data: topPicksData, isLoading: isSignalsLoading } = useQuery<TopPick[]>({
@@ -49,13 +50,15 @@ const Dashboard: React.FC = () => {
         return true;
       }).slice(0, 5);
     },
-    refetchInterval: 30000,
+    refetchInterval: 60000,   // refresh every 60 seconds
+    placeholderData: (prev) => prev,
   });
 
   const { data: marketStatus } = useQuery({
     queryKey: ['market-status'],
     queryFn: getMarketStatus,
     refetchInterval: 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   if (isWalletLoading || isSignalsLoading) {

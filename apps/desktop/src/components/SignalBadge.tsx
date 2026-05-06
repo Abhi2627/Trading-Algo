@@ -8,9 +8,6 @@ interface SignalBadgeProps {
 }
 
 const SignalBadge: React.FC<SignalBadgeProps> = ({ action, confidence, size = 'md' }) => {
-  const isBuy = action === 'buy';
-  const isSell = action === 'sell';
-  const isHold = action === 'hold';
 
   const config = {
     buy: {
