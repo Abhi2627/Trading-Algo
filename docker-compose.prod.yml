@@ -1,16 +1,3 @@
-# docker-compose.prod.yml
-# Production deployment on DigitalOcean Droplet
-# Uses environment variables from .env.prod (never committed to git)
-#
-# Services:
-#   backend  — FastAPI on port 8000
-#   celery   — Celery worker (same image, different CMD)
-#   postgres — PostgreSQL database
-#   redis    — Redis for Celery broker
-#
-# Usage:
-#   docker-compose -f docker-compose.prod.yml up -d
-
 version: '3.9'
 
 services:
@@ -19,13 +6,13 @@ services:
     image: postgres:16-alpine
     restart: always
     environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-trading_db}
-      POSTGRES_USER:     ${POSTGRES_USER:-trading_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_db}
+      POSTGRES_USER: ${POSTGRES_USER:-trading_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trading_user} -d ${POSTGRES_DB:-trading_db}"]
+      test: ["CMD-SHELL", "pg_isready -U trading_user -d trading_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,16 +37,14 @@ services:
       - "8000:8000"
     env_file:
       - .env.prod
+    volumes:
+      - model_data:/app/data/trained_models
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: >
-      sh -c "alembic upgrade head &&
-             python3 -c \"import asyncio, sys; sys.path.insert(0, '.'); 
-exec(open('scripts/seed_if_empty.py').read())\" &&
-             uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"
+    command: sh -c "alembic upgrade head && python3 scripts/seed_if_empty.py && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1 --timeout-keep-alive 120"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -74,6 +59,8 @@ exec(open('scripts/seed_if_empty.py').read())\" &&
     restart: always
     env_file:
       - .env.prod
+    volumes:
+      - model_data:/app/data/trained_models
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +70,25 @@ exec(open('scripts/seed_if_empty.py').read())\" &&
         condition: service_healthy
     command: celery -A workers.celery_app worker --loglevel=info --pool=solo
 
+  celery-beat:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.prod
+    volumes:
+      - model_data:/app/data/trained_models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: celery -A workers.celery_app beat --loglevel=info
+
 volumes:
+  model_data:
   postgres_data:
   redis_data:
