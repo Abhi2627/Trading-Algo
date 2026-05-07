@@ -178,6 +178,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ],
               ),
               const SizedBox(height: 20),
+              // Add Funds button
+              _AddFundsSection(ref: ref),
+              const SizedBox(height: 20),
               const Text("Today's Top Picks",
                   style: TextStyle(color: AppColors.textPrimary,
                       fontSize: 15, fontWeight: FontWeight.w700)),
@@ -289,6 +292,146 @@ class _TopPickCard extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AddFundsSection extends StatefulWidget {
+  final WidgetRef ref;
+  const _AddFundsSection({required this.ref});
+
+  @override
+  State<_AddFundsSection> createState() => _AddFundsSectionState();
+}
+
+class _AddFundsSectionState extends State<_AddFundsSection> {
+  final _controller = TextEditingController();
+  bool _loading = false;
+  String? _error;
+  bool _success = false;
+
+  Future<void> _addFunds(double amount) async {
+    if (amount <= 0) {
+      setState(() => _error = 'Amount must be greater than 0');
+      return;
+    }
+    setState(() { _loading = true; _error = null; _success = false; });
+    try {
+      final dio = await widget.ref.read(dioProvider.future);
+      await dio.post('/wallet/add-funds', data: {
+        'amount': amount,
+        'reason': 'manual topup from mobile',
+      });
+      widget.ref.invalidate(walletProvider);
+      setState(() { _success = true; _loading = false; });
+      _controller.clear();
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _success = false);
+    } catch (e) {
+      setState(() { _error = 'Failed to add funds'; _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accent.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(children: [
+            Icon(Icons.add_circle_outline, color: AppColors.accent, size: 16),
+            SizedBox(width: 6),
+            Text('Add Paper Money',
+                style: TextStyle(color: AppColors.textPrimary,
+                    fontSize: 13, fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 10),
+          // Quick amount buttons
+          Row(children: [500, 1000, 2000].map((amt) =>
+            Expanded(
+              child: GestureDetector(
+                onTap: () => _controller.text = amt.toString(),
+                child: Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.elevated,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.borderDef),
+                  ),
+                  child: Text('₹$amt',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 11, fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ),
+          ).toList()),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Custom amount',
+                  hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                  prefixText: '₹ ',
+                  prefixStyle: const TextStyle(color: AppColors.textMuted),
+                  filled: true,
+                  fillColor: AppColors.elevated,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppColors.borderDef),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppColors.borderDef),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: _loading ? null : () {
+                final amt = double.tryParse(_controller.text) ?? 0;
+                _addFunds(amt);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: _loading
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Add', style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_error!,
+                  style: const TextStyle(color: AppColors.red, fontSize: 11)),
+            ),
+          if (_success)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('✅ Funds added successfully',
+                  style: TextStyle(color: AppColors.green, fontSize: 11)),
+            ),
+        ],
       ),
     );
   }
