@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from core.models import WalletTransaction, TransactionType
 from services.wallet.wallet_service import get_wallet_service
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
@@ -34,7 +35,12 @@ class WithdrawRequest(BaseModel):
 
 
 class SetTopupRequest(BaseModel):
-    amount: float  # new monthly topup amount in INR
+    amount: float
+
+
+class AddFundsRequest(BaseModel):
+    amount: float
+    reason: str = "manual topup"
 
 
 @router.get("/summary")
@@ -79,6 +85,45 @@ async def close_trade(
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
     return result
+
+
+@router.post("/add-funds")
+async def add_funds(
+    request: AddFundsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Manually add paper money to the wallet.
+    Use this to simulate adding real funds for paper trading.
+    """
+    if request.amount <= 0:
+        raise HTTPException(status_code=422, detail="Amount must be positive")
+    if request.amount > 100000:
+        raise HTTPException(status_code=422, detail="Cannot add more than ₹1,00,000 at once")
+
+    wallet = await get_wallet_service().get_or_create(db)
+    wallet.cash_balance = round(wallet.cash_balance + request.amount, 2)
+    if wallet.total_equity > wallet.peak_equity:
+        wallet.peak_equity = round(wallet.total_equity, 2)
+    wallet.risk_mode = wallet.compute_risk_mode()
+
+    db.add(WalletTransaction(
+        wallet_id=wallet.id,
+        type=TransactionType.topup,
+        amount=request.amount,
+        balance_after=wallet.cash_balance,
+        description=f"Manual topup: ₹{request.amount:.0f} — {request.reason}",
+    ))
+    await db.commit()
+
+    return {
+        "added":        request.amount,
+        "cash_balance": round(wallet.cash_balance, 2),
+        "total_equity": round(wallet.total_equity, 2),
+        "risk_mode":    wallet.risk_mode.value,
+        "message":      f"₹{request.amount:.0f} added to wallet. New cash balance: ₹{wallet.cash_balance:.0f}"
+    }
 
 
 @router.post("/topup")

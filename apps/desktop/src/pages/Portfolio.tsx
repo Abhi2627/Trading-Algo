@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   AreaChart, 
@@ -17,6 +17,7 @@ import {
   TradeHistory,
   TradeHistoryItem
 } from '../lib/api';
+import axios from 'axios';
 import { queryKeys } from '../lib/queryKeys';
 import StatCard from '../components/StatCard';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -26,7 +27,8 @@ import {
   ArrowDownCircle, 
   Target, 
   ShieldAlert,
-  Info
+  Info,
+  PlusCircle
 } from 'lucide-react';
 
 const formatINR = (v: number) =>
@@ -38,11 +40,14 @@ const formatINR = (v: number) =>
 
 const Portfolio: React.FC = () => {
   const queryClient = useQueryClient();
+  const [topupAmount, setTopupAmount] = useState('');
+  const [topupOpen, setTopupOpen] = useState(false);
 
   const { data: wallet, isLoading, isError } = useQuery<WalletSummary>({
     queryKey: queryKeys.wallet,
     queryFn: getWalletSummary,
-    refetchInterval: 5000,
+    refetchInterval: 15000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: history } = useQuery<TradeHistory>({
@@ -57,8 +62,23 @@ const Portfolio: React.FC = () => {
     },
   });
 
-  // Real equity curve — flat at current equity until trades happen
-  const startEquity = 11000; // initial capital
+  const topupMutation = useMutation({
+    mutationFn: async (amount: number) => {
+      const { data } = await axios.post(
+        `${import.meta.env.VITE_API_URL}/wallet/add-funds`,
+        { amount },
+        { headers: { 'X-API-Key': import.meta.env.VITE_API_KEY } }
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.wallet });
+      setTopupOpen(false);
+      setTopupAmount('');
+    },
+  });
+
+  const startEquity = 2000;
   const currentEquity = wallet?.total_equity ?? startEquity;
   const chartData = Array.from({ length: 30 }, (_, i) => ({
     date: `Day ${i + 1}`,
@@ -70,25 +90,73 @@ const Portfolio: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      {/* Top: Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard
-          label="Total Equity"
-          value={formatINR(wallet.total_equity)}
-          icon={<Wallet size={20} />}
-        />
-        <StatCard
-          label="Realised P&L"
-          value={formatINR(wallet.realised_pnl)}
-          trend={wallet.realised_pnl >= 0 ? 'up' : 'down'}
-          icon={<TrendingUp size={20} />}
-        />
-        <StatCard
-          label="Unrealised P&L"
-          value={formatINR(wallet.unrealised_pnl)}
-          trend={wallet.unrealised_pnl >= 0 ? 'up' : 'down'}
-          icon={<ArrowDownCircle size={20} />}
-        />
+      {/* Top: Stats + Add Funds */}
+      <div className="flex items-start justify-between gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1">
+          <StatCard label="Total Equity" value={formatINR(wallet.total_equity)} icon={<Wallet size={20} />} />
+          <StatCard label="Realised P&L" value={formatINR(wallet.realised_pnl)} trend={wallet.realised_pnl >= 0 ? 'up' : 'down'} icon={<TrendingUp size={20} />} />
+          <StatCard label="Unrealised P&L" value={formatINR(wallet.unrealised_pnl)} trend={wallet.unrealised_pnl >= 0 ? 'up' : 'down'} icon={<ArrowDownCircle size={20} />} />
+        </div>
+
+        {/* Add Funds Button */}
+        <div className="relative">
+          <button
+            onClick={() => setTopupOpen(!topupOpen)}
+            className="flex items-center gap-2 bg-accent hover:bg-accent/80 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all"
+          >
+            <PlusCircle size={16} />
+            Add Funds
+          </button>
+
+          {topupOpen && (
+            <div className="absolute right-0 top-12 z-50 bg-background-surface border border-border-default rounded-xl p-4 shadow-2xl w-64">
+              <div className="text-sm font-bold mb-3 text-text-primary">Add Paper Money</div>
+              <div className="text-xs text-text-muted mb-3">
+                Current cash: {formatINR(wallet.cash_balance)}
+              </div>
+              <input
+                type="number"
+                value={topupAmount}
+                onChange={e => setTopupAmount(e.target.value)}
+                placeholder="Enter amount (e.g. 1000)"
+                className="w-full bg-background-primary border border-border-default rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent mb-3"
+                min="1"
+              />
+              <div className="flex gap-2">
+                {[500, 1000, 2000].map(amt => (
+                  <button
+                    key={amt}
+                    onClick={() => setTopupAmount(String(amt))}
+                    className="flex-1 text-xs bg-background-elevated hover:bg-accent/20 border border-border-default rounded-lg py-1.5 font-bold transition-all"
+                  >
+                    ₹{amt}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => { setTopupOpen(false); setTopupAmount(''); }}
+                  className="flex-1 text-xs border border-border-default rounded-lg py-2 font-bold text-text-muted hover:text-text-primary transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const amt = parseFloat(topupAmount);
+                    if (amt > 0) topupMutation.mutate(amt);
+                  }}
+                  disabled={!topupAmount || topupMutation.isPending}
+                  className="flex-1 text-xs bg-accent hover:bg-accent/80 text-white rounded-lg py-2 font-bold transition-all disabled:opacity-50"
+                >
+                  {topupMutation.isPending ? 'Adding...' : 'Add Funds'}
+                </button>
+              </div>
+              {topupMutation.isError && (
+                <div className="text-xs text-red mt-2">Failed to add funds. Try again.</div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
