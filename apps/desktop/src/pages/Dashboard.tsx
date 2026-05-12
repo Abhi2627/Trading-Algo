@@ -81,7 +81,34 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      {/* Market Status Banner */}
+      {/* Low Balance Alert */}
+      {wallet?.alert && (
+        <div className={`border rounded-xl px-4 py-3 flex items-start gap-3 ${
+          wallet.alert.severity === 'critical'
+            ? 'bg-red/10 border-red/30'
+            : 'bg-amber/10 border-amber/30'
+        }`}>
+          <AlertTriangle size={16} className={wallet.alert.severity === 'critical' ? 'text-red shrink-0 mt-0.5' : 'text-amber shrink-0 mt-0.5'} />
+          <div className="flex-1">
+            <span className={`font-bold text-sm ${
+              wallet.alert.severity === 'critical' ? 'text-red' : 'text-amber'
+            }`}>
+              {wallet.alert.severity === 'critical' ? 'Trading Stopped — ' : 'Low Balance — '}
+            </span>
+            <span className="text-sm text-text-muted">{wallet.alert.message}</span>
+          </div>
+          <button
+            onClick={() => navigate('/portfolio')}
+            className={`text-xs font-bold px-3 py-1.5 rounded-lg shrink-0 ${
+              wallet.alert.severity === 'critical'
+                ? 'bg-red/20 text-red hover:bg-red/30'
+                : 'bg-amber/20 text-amber hover:bg-amber/30'
+            } transition-all`}
+          >
+            Add Funds
+          </button>
+        </div>
+      )}
       {marketStatus && !marketStatus.is_open && (
         <div className="bg-amber/10 border border-amber/30 rounded-xl px-4 py-3 flex items-center gap-3">
           <AlertTriangle size={16} className="text-amber shrink-0" />

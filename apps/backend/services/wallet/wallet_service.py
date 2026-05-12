@@ -86,6 +86,40 @@ class WalletService:
         budget = get_risk_manager().check_daily_budget(effective_equity)
         daily_loss = await self._daily_realised_loss(db)
 
+        # Low balance notification
+        MIN_TRADING_BALANCE = 2000.0
+        low_balance_alert = None
+        if wallet.cash_balance < MIN_TRADING_BALANCE and len(positions) == 0:
+            shortfall = round(MIN_TRADING_BALANCE - wallet.cash_balance, 2)
+            low_balance_alert = {
+                "type": "low_balance",
+                "severity": "critical" if wallet.cash_balance < 500 else "warning",
+                "message": (
+                    f"Insufficient funds to execute trades. "
+                    f"Minimum ₹{MIN_TRADING_BALANCE:,.0f} required, "
+                    f"you have ₹{wallet.cash_balance:,.0f}. "
+                    f"Please add ₹{shortfall:,.0f} to continue trading."
+                ),
+                "cash_balance":    round(wallet.cash_balance, 2),
+                "minimum_required": MIN_TRADING_BALANCE,
+                "shortfall":        shortfall,
+                "action":          "Add funds via the Portfolio screen",
+            }
+        elif wallet.cash_balance < MIN_TRADING_BALANCE and len(positions) > 0:
+            shortfall = round(MIN_TRADING_BALANCE - wallet.cash_balance, 2)
+            low_balance_alert = {
+                "type": "low_balance",
+                "severity": "warning",
+                "message": (
+                    f"Low cash balance. Once current position closes, "
+                    f"add ₹{shortfall:,.0f} to continue trading automatically."
+                ),
+                "cash_balance":    round(wallet.cash_balance, 2),
+                "minimum_required": MIN_TRADING_BALANCE,
+                "shortfall":        shortfall,
+                "action":          "Add funds via the Portfolio screen",
+            }
+
         return {
             "cash_balance":     round(wallet.cash_balance, 2),
             "invested_balance": round(wallet.invested_balance, 2),
@@ -106,6 +140,7 @@ class WalletService:
             },
             "open_positions": positions,
             "open_count":     len(positions),
+            "alert":          low_balance_alert,
         }
 
     # ------------------------------------------------------------------ #

@@ -178,6 +178,49 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ],
               ),
               const SizedBox(height: 20),
+              // Low balance alert
+              if (wallet.cashBalance < 2000)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: wallet.cashBalance < 500
+                        ? AppColors.red.withOpacity(0.1)
+                        : AppColors.amber.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: wallet.cashBalance < 500
+                          ? AppColors.red.withOpacity(0.4)
+                          : AppColors.amber.withOpacity(0.4),
+                    ),
+                  ),
+                  child: Row(children: [
+                    Icon(
+                      wallet.cashBalance < 500
+                          ? Icons.error_outline
+                          : Icons.warning_amber_rounded,
+                      color: wallet.cashBalance < 500
+                          ? AppColors.red
+                          : AppColors.amber,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        wallet.cashBalance < 500
+                            ? 'Trading stopped — add at least \u20b92,000 to resume'
+                            : 'Low balance — add \u20b9${(2000 - wallet.cashBalance).toStringAsFixed(0)} to continue trading',
+                        style: TextStyle(
+                          color: wallet.cashBalance < 500
+                              ? AppColors.red
+                              : AppColors.amber,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
               // Add Funds button
               _AddFundsSection(ref: ref),
               const SizedBox(height: 20),
