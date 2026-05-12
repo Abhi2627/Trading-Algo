@@ -48,7 +48,7 @@ async def init_db():
     """
     async with engine.begin() as conn:
         import core.models  # noqa: F401 — ensures models are registered on Base
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=True))
 
 
 async def close_db():
