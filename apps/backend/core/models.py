@@ -295,6 +295,51 @@ class DailyReport(Base):
         return f"<DailyReport {self.report_date} {self.report_type.value}>"
 
 
+class SignalOutcome(Base):
+    """
+    Tracks every signal that led to an auto-executed trade.
+    Populated at trade-open time; updated at trade-close time.
+    Provides the ground truth for ML model retraining and strategy eval.
+
+    Separate from PredictionOutcome (which is report-centric).
+    This is trade-centric: one row per trade, self-contained.
+    """
+    __tablename__ = "signal_outcome"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    signal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("signal.id"), index=True)
+    trade_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("trade.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String, index=True)         # denormalized for fast queries
+    signal_action: Mapped[str] = mapped_column(String)              # buy / sell
+    signal_confidence: Mapped[float] = mapped_column(Float)         # at time of signal
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    exit_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # stop_loss / take_profit / time_exit / trailing_stop
+    realized_pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pnl_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)      # (exit - entry) / entry
+    days_held: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    outcome: Mapped[OutcomeResult] = mapped_column(
+        SAEnum(OutcomeResult), default=OutcomeResult.pending, index=True
+    )  # correct = profitable close, wrong = stop-loss hit, pending = still open
+    ensemble_score: Mapped[float] = mapped_column(Float)            # copy from signal for retraining
+    market_regime: Mapped[str] = mapped_column(String)              # copy from signal
+    opened_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_signal_outcome_symbol_opened", "symbol", "opened_at"),
+        Index("ix_signal_outcome_outcome", "outcome"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<SignalOutcome {self.symbol} {self.signal_action.upper()} "
+            f"outcome={self.outcome.value} pnl={self.pnl_pct:+.2%}>"
+            if self.pnl_pct is not None
+            else f"<SignalOutcome {self.symbol} {self.signal_action.upper()} outcome={self.outcome.value}>"
+        )
+
+
 class PredictionOutcome(Base):
     __tablename__ = "prediction_outcome"
 

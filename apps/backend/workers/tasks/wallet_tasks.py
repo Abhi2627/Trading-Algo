@@ -33,14 +33,16 @@ async def _check_stop_losses_async() -> dict:
     from sqlalchemy import select
     from services.market_data.fetcher import fetch_latest_price
     from services.wallet.wallet_service import get_wallet_service
+    from services.wallet.risk_manager import STOP_LOSS_PCT as _SL, TAKE_PROFIT_PCT as _TP, TIME_EXIT_DAYS
+    from datetime import datetime, timezone
 
-    # Trailing stop parameters
+    # Use constants from risk_manager so everything stays in sync
     TRAIL_ACTIVATE_PCT = 0.07   # trailing stop activates once up 7%
     TRAIL_PCT          = 0.06   # trail sits 6% below peak price
-    TAKE_PROFIT_PCT    = 0.20   # hard take-profit at +20%
-    STOP_LOSS_PCT      = 0.05   # hard stop-loss at -5% from entry
+    TAKE_PROFIT_PCT    = _TP    # 0.08 — hard take-profit
+    STOP_LOSS_PCT      = _SL    # 0.03 — hard stop-loss
 
-    stopped = took_profit = trailing_stopped = 0
+    stopped = took_profit = trailing_stopped = time_exited = 0
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -100,10 +102,24 @@ async def _check_stop_losses_async() -> dict:
                         f"trail=₹{trailing_stop:.2f} current=₹{price}"
                     )
 
-            # 3. Hard take-profit at +20%
+            # 3. Hard take-profit
             hard_tp = entry * (1 + TAKE_PROFIT_PCT)
             if price >= hard_tp:
                 reason = 'take_profit_triggered'
+
+            # 4. Time-based exit — exit after TIME_EXIT_DAYS if not profitable
+            #    This frees up capital that's just sitting flat/down.
+            #    Only triggers if we haven't already hit SL/TP above.
+            if reason is None:
+                days_held = (
+                    datetime.now(timezone.utc) - trade.entry_time
+                ).total_seconds() / 86400
+                if days_held >= TIME_EXIT_DAYS and gain_pct <= 0:
+                    reason = 'time_exit_not_profitable'
+                    logger.info(
+                        f"Time exit: {asset.symbol} held {days_held:.1f}d "
+                        f"gain={gain_pct:+.2%} — freeing capital"
+                    )
 
             if reason:
                 close_result = await wallet_svc.close_trade(
@@ -116,6 +132,8 @@ async def _check_stop_losses_async() -> dict:
                         stopped += 1
                     elif reason == 'trailing_stop_triggered':
                         trailing_stopped += 1
+                    elif reason == 'time_exit_not_profitable':
+                        time_exited += 1
                     else:
                         took_profit += 1
                     logger.info(
@@ -124,17 +142,18 @@ async def _check_stop_losses_async() -> dict:
                         f"pnl=₹{close_result.get('realized_pnl', 0):+.2f}"
                     )
 
-        if stopped + took_profit + trailing_stopped > 0:
+        if stopped + took_profit + trailing_stopped + time_exited > 0:
             await db.commit()
 
     logger.info(
-        f"Stop-loss check: "
-        f"stopped={stopped} trailing_stopped={trailing_stopped} took_profit={took_profit}"
+        f"Stop-loss check: stopped={stopped} trailing_stopped={trailing_stopped} "
+        f"took_profit={took_profit} time_exited={time_exited}"
     )
     return {
         'stopped':          stopped,
         'trailing_stopped': trailing_stopped,
         'took_profit':      took_profit,
+        'time_exited':      time_exited,
     }
 
 

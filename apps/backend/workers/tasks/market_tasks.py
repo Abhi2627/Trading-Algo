@@ -251,19 +251,23 @@ async def _auto_execute_async() -> dict:
             logger.info(results["reason"])
             return results
 
-        # --- 5. Execute trades for top signals ---
+        # --- 5. Execute trades for top signals (fill ALL available slots) ---
         trades_opened = 0
+        cash_exhausted = False
 
-        for signal, asset in unique_signals[:slots_available]:
+        # Fetch 2x signal pool so individual rejections don't block remaining slots.
+        # e.g. Tier 2 has 3 slots: if signal #1 is rejected for price, we still try #2 and #3.
+        for signal, asset in unique_signals[: slots_available * 2]:
             if trades_opened >= slots_available:
                 break
-
+            if cash_exhausted:
+                break
             if wallet.cash_balance < 100:
                 logger.info(f"Cash exhausted (₹{wallet.cash_balance:.0f}) — stopping")
                 break
 
             logger.info(
-                f"Attempting auto-trade: {asset.symbol} "
+                f"Attempting auto-trade [{trades_opened + 1}/{slots_available}]: {asset.symbol} "
                 f"conf={signal.confidence:.0%} "
                 f"score={signal.ensemble_score:.3f}"
             )
@@ -287,7 +291,7 @@ async def _auto_execute_async() -> dict:
                     "confidence":    round(signal.confidence * 100, 1),
                 })
                 logger.info(
-                    f"AUTO-TRADE OPENED: {asset.symbol} "
+                    f"AUTO-TRADE OPENED [{trades_opened}/{slots_available}]: {asset.symbol} "
                     f"qty={result['quantity']} "
                     f"@ \u20b9{result['entry_price']:.2f} "
                     f"| SL \u20b9{result['stop_loss']} "
@@ -302,11 +306,11 @@ async def _auto_execute_async() -> dict:
                 })
                 logger.info(f"Auto-trade rejected for {asset.symbol}: {reason}")
 
-                # If rejected because of price (not capital), still try next signal
-                # If rejected because of capital, stop trying
-                if "cash" in reason.lower() or "capital" in reason.lower():
-                    logger.info("Stopping — insufficient capital for more trades")
-                    break
+                # Only truly stop when cash is gone — price/tier rejections
+                # should NOT block the remaining open slot attempts.
+                if "cash" in reason.lower() and "insufficient" in reason.lower():
+                    logger.info("Stopping — insufficient cash for any more trades")
+                    cash_exhausted = True
 
         await db.commit()
 
