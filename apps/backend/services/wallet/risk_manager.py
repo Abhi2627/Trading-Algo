@@ -14,9 +14,10 @@ logger = logging.getLogger(__name__)
 # Tier 3: ₹50K  - ₹2L    — Full Nifty 50, max 5 positions
 # Tier 4: ₹2L+          — Full universe, max 8 positions
 
-STOP_LOSS_PCT    = 0.05
-TAKE_PROFIT_PCT  = 0.09
-MIN_CONFIDENCE   = 0.40
+STOP_LOSS_PCT    = 0.03   # Cut losses faster — 3% max drawdown per trade
+TAKE_PROFIT_PCT  = 0.08   # Exit sooner with profit — don't hold waiting for 20%
+MIN_CONFIDENCE   = 0.60   # Only quality signals — was 0.40, too many weak signals
+TIME_EXIT_DAYS   = 3      # Exit after 3 days if not profitable — free up capital
 
 
 def get_capital_tier(total_equity: float) -> dict:
@@ -140,11 +141,13 @@ class RiskManager:
                 )
             )
 
-        # Position sizing — adaptive
+        # Position sizing — confidence weighted
+        # Higher confidence → bigger position (40/35/25% split for Tier 2+)
         base_pct   = tier_params['position_pct']
-        conf_scale = min(confidence, 1.0)
+        # Scale position size by confidence: 60% conf = 0.75x, 80% conf = 1.0x, 95% conf = 1.2x
+        conf_scale = 0.5 + (min(confidence, 1.0) * 0.75)
         if risk_mode == RiskMode.conservative:
-            base_pct *= 0.5
+            conf_scale *= 0.5
 
         position_size = min(
             total_equity  * base_pct * conf_scale,
