@@ -34,3 +34,7 @@ logs/
 
 # Alembic — keep versions folder but not __pycache__ inside it
 apps/backend/alembic/versions/__pycache__/
+
+# Celery beat schedule DB — regenerated at runtime, never commit
+celerybeat-schedule.db
+*.db
