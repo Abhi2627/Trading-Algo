@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 
 from core.models import (
-    PaperWallet, WalletTransaction, Trade, Signal, Asset,
-    TransactionType, TradeStatus, TradeType, TradeAction, RiskMode,
+    PaperWallet, WalletTransaction, Trade, Signal, Asset, SignalOutcome,
+    TransactionType, TradeStatus, TradeType, TradeAction, RiskMode, OutcomeResult,
 )
 from services.wallet.risk_manager import get_risk_manager
 from services.market_data.fetcher import fetch_latest_price
@@ -262,6 +262,20 @@ class WalletService:
         ))
 
         await db.flush()
+
+        # Record signal outcome row — will be updated when trade closes
+        db.add(SignalOutcome(
+            signal_id=signal.id,
+            trade_id=trade.id,
+            symbol=asset_symbol,
+            signal_action="buy",
+            signal_confidence=signal.confidence,
+            entry_price=current_price,
+            outcome=OutcomeResult.pending,
+            ensemble_score=signal.ensemble_score,
+            market_regime=signal.market_regime,
+        ))
+
         logger.info(
             f"Trade opened: {asset_symbol} qty={decision.quantity} "
             f"@ ₹{current_price:.2f} | charges=₹{buy_charges.total:.2f} "
@@ -344,9 +358,29 @@ class WalletService:
         ))
 
         await db.flush()
+
+        # Update signal outcome row for this trade
+        outcome_result = await db.execute(
+            select(SignalOutcome).where(SignalOutcome.trade_id == trade.id)
+        )
+        outcome_row = outcome_result.scalar_one_or_none()
+        if outcome_row is not None:
+            outcome_row.exit_price   = exit_price
+            outcome_row.exit_reason  = reason
+            outcome_row.realized_pnl = round(net_pnl, 2)
+            outcome_row.pnl_pct      = round((exit_price - trade.entry_price) / trade.entry_price, 6)
+            outcome_row.days_held    = round(
+                (trade.exit_time - trade.entry_time).total_seconds() / 86400, 2
+            )
+            outcome_row.closed_at    = trade.exit_time
+            outcome_row.outcome      = (
+                OutcomeResult.correct if net_pnl > 0 else OutcomeResult.wrong
+            )
+
         logger.info(
             f"Trade closed: {asset.symbol} "
-            f"gross=₹{gross_pnl:+.2f} charges=₹{sell_charges.total:.2f} net=₹{net_pnl:+.2f}"
+            f"gross=₹{gross_pnl:+.2f} charges=₹{sell_charges.total:.2f} net=₹{net_pnl:+.2f} "
+            f"outcome={'correct' if net_pnl > 0 else 'wrong'}"
         )
 
         return {
