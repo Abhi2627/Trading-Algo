@@ -292,7 +292,7 @@ async def get_analytics(
     # All closed outcomes
     result = await db.execute(
         select(SignalOutcome).where(
-            SignalOutcome.outcome != OutcomeResult.pending
+            SignalOutcome.outcome != 'pending'
         ).order_by(SignalOutcome.closed_at)
     )
     outcomes = result.scalars().all()
