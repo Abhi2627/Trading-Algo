@@ -94,6 +94,70 @@ def compute_atr_stops(
         return stop_loss, take_profit, 'fixed'
 
 
+# ---------------------------------------------------------------------------
+# Sector map — derived from SECTIONS in assets.py
+# Used for concentration checks: don't hold >MAX_SAME_SECTOR stocks
+# ---------------------------------------------------------------------------
+
+MAX_SAME_SECTOR = 2   # max positions in any one sector simultaneously
+
+# Build symbol → sector mapping at import time (zero runtime cost)
+_SECTOR_MAP: dict[str, str] = {}
+
+def _build_sector_map() -> dict[str, str]:
+    from services.market_data.assets import SECTIONS
+    mapping = {}
+    for section_id, _, symbols in SECTIONS:
+        for sym, _ in symbols:
+            # Use the base ticker without exchange prefix for matching
+            # so NSE:TCS and BSE:TCS both map to 'nifty_it'
+            ticker = sym.split(":", 1)[1]
+            # First section wins (avoids Nifty 50 overriding sector-specific)
+            if ticker not in mapping:
+                mapping[ticker] = section_id
+    return mapping
+
+
+def get_sector(symbol: str) -> str:
+    """
+    Return the sector/index section for a symbol.
+    e.g. 'NSE:TCS' → 'nifty_it', 'NSE:HDFCBANK' → 'nifty_bank'
+    Returns 'unknown' if not found.
+    """
+    global _SECTOR_MAP
+    if not _SECTOR_MAP:
+        _SECTOR_MAP = _build_sector_map()
+    ticker = symbol.split(":", 1)[1] if ":" in symbol else symbol
+    return _SECTOR_MAP.get(ticker, 'unknown')
+
+
+def check_sector_concentration(
+    symbol: str,
+    open_trade_symbols: list[str],
+) -> tuple[bool, str]:
+    """
+    Check if opening this symbol would breach sector concentration limit.
+
+    Returns:
+        (ok, reason) — ok=True means safe to proceed
+    """
+    sector = get_sector(symbol)
+    if sector == 'unknown':
+        return True, ''   # unknown sector — don't block
+
+    same_sector = [
+        s for s in open_trade_symbols
+        if get_sector(s) == sector and s != symbol
+    ]
+    if len(same_sector) >= MAX_SAME_SECTOR:
+        return False, (
+            f"Sector concentration: already holding {len(same_sector)} "
+            f"{sector.replace('_', ' ').title()} stock(s) "
+            f"({', '.join(same_sector)}). Max {MAX_SAME_SECTOR} per sector."
+        )
+    return True, ''
+
+
 def get_capital_tier(total_equity: float) -> dict:
     """Return trading parameters appropriate for the capital level."""
     if total_equity < 10_000:
@@ -167,7 +231,8 @@ class RiskManager:
         daily_loss_limit:     float,
         is_intraday:          bool = False,
         existing_open_trades: int  = 0,
-        symbol:               str  = '',   # needed for ATR computation
+        symbol:               str  = '',
+        open_trade_symbols:   list = None,  # for sector concentration check
     ) -> RiskDecision:
         """
         Capital-adaptive position sizing with ATR-based stop-loss.
@@ -211,6 +276,12 @@ class RiskManager:
                 f"Maximum positions ({max_pos}) for your capital tier reached",
                 suggestion=f"Close an existing position to open a new one"
             )
+
+        # Sector concentration check
+        if symbol and open_trade_symbols:
+            ok, reason = check_sector_concentration(symbol, open_trade_symbols)
+            if not ok:
+                return reject(reason, suggestion="Diversify across sectors for better risk management")
 
         # Capital-tier stock price check
         max_price = tier_params['max_stock_price']

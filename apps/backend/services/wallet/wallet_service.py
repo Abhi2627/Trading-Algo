@@ -180,11 +180,15 @@ class WalletService:
         if current_price is None:
             return {"error": "Could not fetch current price"}
 
-        # Count open trades
-        open_count_result = await db.execute(
-            select(func.count(Trade.id)).where(Trade.status == TradeStatus.open)
+        # Count open trades and collect their symbols for sector concentration check
+        open_trades_q = await db.execute(
+            select(Trade, Asset)
+            .join(Asset, Trade.asset_id == Asset.id)
+            .where(Trade.status == TradeStatus.open)
         )
-        open_count = open_count_result.scalar() or 0
+        open_rows   = open_trades_q.all()
+        open_count  = len(open_rows)
+        open_symbols = [a.symbol for _, a in open_rows]
 
         daily_loss = await self._daily_realised_loss(db)
         budget     = rm.check_daily_budget(wallet.total_equity)
@@ -199,7 +203,8 @@ class WalletService:
             daily_loss_limit=budget["loss_limit"],
             is_intraday=is_intraday,
             existing_open_trades=open_count,
-            symbol=asset_symbol,           # enables ATR-based SL/TP
+            symbol=asset_symbol,
+            open_trade_symbols=open_symbols,   # enables sector concentration check
         )
 
         if not decision.approved:
