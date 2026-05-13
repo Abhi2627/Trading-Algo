@@ -1,233 +1,130 @@
 # services/chat/chatbot.py
-# Explainability chatbot. Reads signal audit records from DB and
-# generates plain-English explanations via LLM.
-# The LLM never invents data — it only narrates what the system computed.
+# Explainability chatbot with RAG — retrieves real trade/signal data
+# from DB and uses it as LLM context. Never invents data.
 import logging
 import json
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-
-from core.models import Signal, Asset, Trade, TradeStatus
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """
-You are a trading assistant.
+SYSTEM_PROMPT = """You are AlgoTrade's AI assistant — an expert at explaining what the automated trading system did and why.
 
-Rules:
-- Provide clear, structured responses.
-- Be concise and practical.
-- Do not give financial advice.
-- Never invent or fabricate data. Only use provided or known information.
-- Always include risk considerations.
-- Always end with: "This is for educational and simulation purposes only."
+Your job:
+- Explain trade decisions using the ACTUAL data provided in context
+- Answer questions about portfolio performance, losses, wins, signals
+- Never invent numbers, prices, or outcomes — only use provided data
+- Be direct and specific: name the stock, the price, the reason
+
+Tone: concise, factual, like a senior quant explaining to a junior trader.
+Format: short paragraphs, no bullet overload, max 250 words.
+Always end with: "This is paper trading — for educational purposes only."
 """
 
-class Chatbot:
-    """
-    Handles all chat interactions.
-    Supports two modes:
-      1. Signal explanation  — "Why did you recommend selling Reliance?"
-      2. General market Q&A — "What is RSI?", "How is my portfolio doing?"
-    """
 
+class Chatbot:
     async def respond(
         self,
         message: str,
         db: AsyncSession,
         conversation_history: list[dict] = None,
     ) -> dict:
-        """
-        Generate a response to a user message.
-
-        Args:
-            message:              User's question.
-            db:                   DB session for context lookup.
-            conversation_history: Last N turns as [{role, content}, ...].
-
-        Returns:
-            {"reply": str, "context_used": str, "signal_id": str | None}
-        """
         history = conversation_history or []
 
-        # 1. Detect intent and fetch relevant context from DB
-        context, signal_id = await self._fetch_context(message, db)
+        # RAG: retrieve relevant context from DB
+        from services.chat.rag_retriever import retrieve_context
+        context = await retrieve_context(message, db)
 
-        # 2. Build prompt with context injected
-        user_prompt = self._build_user_prompt(message, context)
+        # Build prompt with retrieved context
+        user_prompt = self._build_prompt(message, context)
 
-        # 3. Call LLM
+        # Call LLM
         reply = await self._call_llm(user_prompt, history)
 
         return {
             "reply":        reply,
             "context_used": context.get("type", "general"),
-            "signal_id":    signal_id,
+            "signal_id":    None,
         }
 
-    # ------------------------------------------------------------------
-    # Context fetching
-    # ------------------------------------------------------------------
+    def _build_prompt(self, message: str, context: dict) -> str:
+        ctx_type = context.get("type", "general")
+        ctx_json = json.dumps(context, indent=2, default=str)
 
-    async def _fetch_context(self, message: str, db: AsyncSession) -> tuple[dict, Optional[str]]:
-        """
-        Parse the message for signal/symbol references and fetch
-        the relevant audit record. Returns (context_dict, signal_id).
-        """
-        msg_lower = message.lower()
-
-        # Try to extract a symbol from the message
-        symbol = await self._extract_symbol(msg_lower, db)
-
-        if symbol:
-            # Fetch most recent signal for that symbol
-            asset_result = await db.execute(
-                select(Asset).where(Asset.symbol == symbol)
-            )
-            asset = asset_result.scalar_one_or_none()
-
-            if asset:
-                sig_result = await db.execute(
-                    select(Signal)
-                    .where(Signal.asset_id == asset.id)
-                    .order_by(desc(Signal.created_at))
-                    .limit(1)
-                )
-                signal = sig_result.scalar_one_or_none()
-
-                if signal:
-                    return self._build_signal_context(signal, asset), str(signal.id)
-
-        # Portfolio context for performance questions
-        if any(w in msg_lower for w in ["portfolio", "wallet", "balance", "pnl", "profit", "loss"]):
-            context = await self._fetch_portfolio_context(db)
-            return context, None
-
-        # No specific context — general Q&A
-        return {"type": "general"}, None
-
-    async def _extract_symbol(self, message: str, db: AsyncSession) -> Optional[str]:
-        """Scan message for known asset symbols or company names."""
-        result = await db.execute(select(Asset.symbol, Asset.name))
-        assets = result.all()
-
-        for symbol, name in assets:
-            ticker = symbol.split(":")[-1].lower()  # e.g. NSE:RELIANCE -> reliance
-            if ticker in message or name.lower().split()[0] in message:
-                return symbol
-        return None
-
-    def _build_signal_context(self, signal: Signal, asset: Asset) -> dict:
-        """Build a structured context dict from a signal record."""
-        indicators = signal.technical_indicators or {}
-        sources    = signal.sentiment_sources    or []
-
-        return {
-            "type":          "signal_explanation",
-            "symbol":        asset.symbol,
-            "name":          asset.name,
-            "action":        signal.action.value,
-            "confidence":    f"{signal.confidence:.0%}",
-            "market_regime": signal.market_regime,
-            "generated_at":  signal.created_at.isoformat(),
-
-            # Model contributions
-            "rl_score":          round(signal.rl_score, 4),
-            "transformer_score": round(signal.transformer_score, 4),
-            "sentiment_score":   round(signal.sentiment_score, 4),
-            "ensemble_score":    round(signal.ensemble_score, 4),
-
-            # Technical snapshot
-            "rsi_14":        indicators.get("rsi_14"),
-            "macd_line":     indicators.get("macd_line"),
-            "adx":           indicators.get("adx"),
-            "volume_ratio":  indicators.get("volume_ratio"),
-            "atr_pct":       indicators.get("atr_pct"),
-
-            # Sentiment headlines (up to 3)
-            "news_headlines": [s.get("headline", "") for s in sources[:3]],
-        }
-
-    async def _fetch_portfolio_context(self, db: AsyncSession) -> dict:
-        """Fetch current wallet and open positions summary."""
-        from core.models import PaperWallet, Trade, Asset, TradeStatus
-        from services.market_data.fetcher import fetch_latest_price
-
-        wallet_result = await db.execute(select(PaperWallet).limit(1))
-        wallet = wallet_result.scalar_one_or_none()
-        if wallet is None:
-            return {"type": "portfolio", "message": "No wallet found"}
-
-        open_result = await db.execute(
-            select(Trade, Asset)
-            .join(Asset, Trade.asset_id == Asset.id)
-            .where(Trade.status == TradeStatus.open)
-        )
-        positions = []
-        for trade, asset in open_result.all():
-            price = fetch_latest_price(asset.symbol) or trade.entry_price
-            pnl   = (price - trade.entry_price) * trade.quantity
-            positions.append({
-                "symbol": asset.symbol,
-                "pnl":    round(pnl, 2),
-                "pnl_pct": round((price - trade.entry_price) / trade.entry_price * 100, 2),
-            })
-
-        return {
-            "type":           "portfolio",
-            "total_equity":   round(wallet.total_equity, 2),
-            "cash_balance":   round(wallet.cash_balance, 2),
-            "realized_pnl":   round(wallet.realized_pnl, 2),
-            "drawdown_pct":   round(wallet.drawdown_pct * 100, 2),
-            "risk_mode":      wallet.risk_mode.value,
-            "open_positions": positions,
-        }
-
-    # ------------------------------------------------------------------
-    # Prompt building
-    # ------------------------------------------------------------------
-
-    def _build_user_prompt(self, message: str, context: dict) -> str:
-        """Inject context into user message so LLM narrates real data."""
-        context_type = context.get("type", "general")
-
-        if context_type == "signal_explanation":
+        if ctx_type == "general":
             return (
-                f"User question: {message}\n\n"
-                f"Signal data for context (use ONLY this data in your explanation):\n"
-                f"{json.dumps(context, indent=2, default=str)}\n\n"
-                f"Explain why the {context['action'].upper()} signal was generated for "
-                f"{context['name']} ({context['symbol']}) with {context['confidence']} confidence. "
-                f"Be specific about which factors (RL score, transformer forecast, sentiment, "
-                f"technical indicators) drove the decision."
+                f"Question: {message}\n\n"
+                f"Answer based on your trading knowledge. Be concise."
             )
 
-        if context_type == "portfolio":
+        if ctx_type == "stock_deep_dive":
+            symbol = context.get("symbol", "")
+            trades = context.get("trade_history", [])
+            signal = context.get("latest_signal") or {}
             return (
-                f"User question: {message}\n\n"
-                f"Portfolio data:\n"
-                f"{json.dumps(context, indent=2, default=str)}\n\n"
-                f"Answer the user's question based only on this data."
+                f"Question: {message}\n\n"
+                f"Data for {symbol}:\n{ctx_json}\n\n"
+                f"Using ONLY the data above: explain what happened with {symbol}. "
+                f"Cover: signal direction ({signal.get('action','?')} at "
+                f"{signal.get('confidence','?')} confidence), "
+                f"trade outcomes ({len(trades)} trades found), "
+                f"exit reasons, and what the models (RL, transformer, sentiment) indicated. "
+                f"If there were losses, explain why based on the data."
             )
 
-        # General knowledge question
+        if ctx_type == "trade_history":
+            summary = context.get("summary", {})
+            return (
+                f"Question: {message}\n\n"
+                f"Trade history data:\n{ctx_json}\n\n"
+                f"Summarise the recent trading performance: "
+                f"{summary.get('total_trades',0)} trades, "
+                f"{summary.get('win_rate',0)}% win rate, "
+                f"₹{summary.get('total_pnl',0)} total P&L. "
+                f"Explain patterns, what worked, what didn't."
+            )
+
+        if ctx_type == "loss_analysis":
+            worst = context.get("worst_trade") or {}
+            return (
+                f"Question: {message}\n\n"
+                f"Loss data:\n{ctx_json}\n\n"
+                f"Analyse the losing trades. Focus on: which exit reasons caused the most losses, "
+                f"worst trade was {worst.get('symbol','?')} at {worst.get('pnl_pct','?')}%, "
+                f"and what patterns explain the losses."
+            )
+
+        if ctx_type == "portfolio":
+            return (
+                f"Question: {message}\n\n"
+                f"Current portfolio:\n{ctx_json}\n\n"
+                f"Answer the question using only this portfolio data. "
+                f"Be specific about numbers."
+            )
+
+        if ctx_type == "performance":
+            return (
+                f"Question: {message}\n\n"
+                f"Performance data:\n{ctx_json}\n\n"
+                f"Analyse the system's trading performance. Cover win rate, P&L, "
+                f"which market regimes worked best, and what needs improvement."
+            )
+
+        if ctx_type == "reports":
+            return (
+                f"Question: {message}\n\n"
+                f"Recent daily reports:\n{ctx_json}\n\n"
+                f"Summarise what the system reported. Use the actual narrative content."
+            )
+
+        # Fallback
         return (
-            f"User question: {message}\n\n"
-            f"Answer this question about trading, technical analysis, or the platform. "
-            f"Keep it educational and concise."
+            f"Question: {message}\n\n"
+            f"Context:\n{ctx_json}\n\n"
+            f"Answer using the provided context only."
         )
 
-    # ------------------------------------------------------------------
-    # LLM call
-    # ------------------------------------------------------------------
-
-    async def _call_llm(
-        self,
-        user_prompt: str,
-        history: list[dict],
-    ) -> str:
-        """Call Groq → Ollama → fallback message."""
+    async def _call_llm(self, user_prompt: str, history: list[dict]) -> str:
         from core.config import settings
         import httpx
 
@@ -237,7 +134,7 @@ class Chatbot:
             {"role": "user", "content": user_prompt},
         ]
 
-        # Try Groq first (works in cloud)
+        # Try Groq first
         if settings.GROQ_API_KEY and settings.GROQ_API_KEY not in ('', 'PASTE_YOUR_NEW_KEY_HERE'):
             try:
                 async with httpx.AsyncClient(timeout=20.0) as client:
@@ -247,43 +144,39 @@ class Chatbot:
                         json={
                             "model":       settings.GROQ_MODEL,
                             "messages":    messages,
-                            "max_tokens":  400,
+                            "max_tokens":  500,
                             "temperature": 0.2,
                         },
                     )
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"].strip()
             except Exception as e:
-                logger.warning(f"Groq chat failed: {e}")
+                logger.warning(f"Groq failed: {e}")
 
-        # Fallback to local Ollama
+        # Fallback: Ollama
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                flat = "\n".join(
-                    f"{m['role'].upper()}: {m['content']}" for m in messages
-                )
+                flat = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
                 resp = await client.post(
                     f"{settings.OLLAMA_BASE_URL}/api/generate",
                     json={
                         "model":  settings.OLLAMA_MODEL,
                         "prompt": flat + "\nASSISTANT:",
                         "stream": False,
-                        "options": {"temperature": 0.2, "num_predict": 400},
+                        "options": {"temperature": 0.2, "num_predict": 500},
                     },
                 )
                 resp.raise_for_status()
                 return resp.json().get("response", "").strip()
         except Exception as e:
-            logger.warning(f"Ollama chat failed: {e}")
+            logger.warning(f"Ollama failed: {e}")
 
         return (
-            "I couldn't generate an explanation right now — "
-            "the AI service is temporarily unavailable. "
-            "This is for educational and simulation purposes only."
+            "The AI service is temporarily unavailable. "
+            "This is paper trading — for educational purposes only."
         )
 
 
-# Module-level singleton
 _chatbot: Optional[Chatbot] = None
 
 def get_chatbot() -> Chatbot:
