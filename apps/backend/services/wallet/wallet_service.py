@@ -199,6 +199,7 @@ class WalletService:
             daily_loss_limit=budget["loss_limit"],
             is_intraday=is_intraday,
             existing_open_trades=open_count,
+            symbol=asset_symbol,           # enables ATR-based SL/TP
         )
 
         if not decision.approved:
@@ -293,6 +294,7 @@ class WalletService:
             "take_profit":     decision.take_profit,
             "cash_remaining":  round(wallet.cash_balance, 2),
             "risk_mode":       wallet.risk_mode.value,
+            "sl_method":       decision.sl_method,   # 'atr' or 'fixed'
             "buy_charges":     buy_charges.as_dict(),
             "charges_preview": preview,
         }

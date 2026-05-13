@@ -14,10 +14,84 @@ logger = logging.getLogger(__name__)
 # Tier 3: ₹50K  - ₹2L    — Full Nifty 50, max 5 positions
 # Tier 4: ₹2L+          — Full universe, max 8 positions
 
-STOP_LOSS_PCT    = 0.03   # Cut losses faster — 3% max drawdown per trade
-TAKE_PROFIT_PCT  = 0.08   # Exit sooner with profit — don't hold waiting for 20%
-MIN_CONFIDENCE   = 0.60   # Only quality signals — was 0.40, too many weak signals
-TIME_EXIT_DAYS   = 3      # Exit after 3 days if not profitable — free up capital
+STOP_LOSS_PCT    = 0.03   # Fallback fixed SL — used when ATR fetch fails
+TAKE_PROFIT_PCT  = 0.08   # Fallback fixed TP — used when ATR fetch fails
+MIN_CONFIDENCE   = 0.60   # Only quality signals
+TIME_EXIT_DAYS   = 3      # Exit after 3 days if not profitable
+
+# ATR-based SL/TP multipliers
+# SL = entry - ATR_SL_MULT * ATR(14)   → 2x ATR below entry
+# TP = entry + ATR_TP_MULT * ATR(14)   → 4x ATR above entry (2:1 RR)
+ATR_SL_MULT      = 2.0
+ATR_TP_MULT      = 4.0
+ATR_PERIOD       = 14
+
+# Hard caps: ATR-derived SL/TP must stay within these bands
+# Prevents absurd stops on illiquid stocks with huge ATR
+ATR_SL_MIN_PCT   = 0.015  # SL never tighter than 1.5% (noise)
+ATR_SL_MAX_PCT   = 0.07   # SL never wider than 7% (too much risk)
+ATR_TP_MIN_PCT   = 0.04   # TP never less than 4%
+ATR_TP_MAX_PCT   = 0.20   # TP never more than 20%
+
+
+def compute_atr_stops(
+    symbol: str,
+    entry_price: float,
+) -> tuple[float, float, str]:
+    """
+    Compute ATR(14)-based stop-loss and take-profit prices.
+
+    Returns:
+        (stop_loss, take_profit, method)
+        method is 'atr' if ATR was used, 'fixed' if fallback.
+    """
+    try:
+        from services.market_data.fetcher import fetch_historical
+        import pandas as pd
+
+        # Need at least ATR_PERIOD + 1 rows — fetch 60 days to be safe
+        df = fetch_historical(symbol, period_days=60, interval='1d')
+        if df is None or len(df) < ATR_PERIOD + 1:
+            raise ValueError(f"Insufficient history: {len(df) if df is not None else 0} rows")
+
+        # True Range = max(H-L, |H-Cprev|, |L-Cprev|)
+        df = df.tail(ATR_PERIOD + 5).copy()  # only need last few rows
+        df['prev_close'] = df['close'].shift(1)
+        df['tr'] = pd.concat([
+            df['high'] - df['low'],
+            (df['high'] - df['prev_close']).abs(),
+            (df['low']  - df['prev_close']).abs(),
+        ], axis=1).max(axis=1)
+        atr = df['tr'].dropna().tail(ATR_PERIOD).mean()
+
+        if atr <= 0 or pd.isna(atr):
+            raise ValueError(f"Invalid ATR: {atr}")
+
+        raw_sl = entry_price - ATR_SL_MULT * atr
+        raw_tp = entry_price + ATR_TP_MULT * atr
+
+        # Clamp to hard-cap bands
+        sl_pct = (entry_price - raw_sl) / entry_price
+        tp_pct = (raw_tp - entry_price) / entry_price
+
+        sl_pct = max(ATR_SL_MIN_PCT, min(sl_pct, ATR_SL_MAX_PCT))
+        tp_pct = max(ATR_TP_MIN_PCT, min(tp_pct, ATR_TP_MAX_PCT))
+
+        stop_loss   = round(entry_price * (1 - sl_pct), 2)
+        take_profit = round(entry_price * (1 + tp_pct), 2)
+
+        logger.info(
+            f"ATR stops for {symbol}: ATR={atr:.2f} "
+            f"SL=₹{stop_loss} ({sl_pct:.1%}) "
+            f"TP=₹{take_profit} ({tp_pct:.1%})"
+        )
+        return stop_loss, take_profit, 'atr'
+
+    except Exception as e:
+        logger.warning(f"ATR computation failed for {symbol}: {e} — using fixed fallback")
+        stop_loss   = round(entry_price * (1 - STOP_LOSS_PCT),   2)
+        take_profit = round(entry_price * (1 + TAKE_PROFIT_PCT), 2)
+        return stop_loss, take_profit, 'fixed'
 
 
 def get_capital_tier(total_equity: float) -> dict:
@@ -75,7 +149,8 @@ class RiskDecision:
     take_profit:    float
     risk_per_trade: float
     tier:           int   = 1
-    suggestion:     str   = ''  # alternative if rejected
+    suggestion:     str   = ''
+    sl_method:      str   = 'fixed'  # 'atr' or 'fixed'
 
 
 class RiskManager:
@@ -92,16 +167,22 @@ class RiskManager:
         daily_loss_limit:     float,
         is_intraday:          bool = False,
         existing_open_trades: int  = 0,
+        symbol:               str  = '',   # needed for ATR computation
     ) -> RiskDecision:
         """
-        Capital-adaptive position sizing.
-        Adjusts max positions, position size, and stock price limits
-        based on available capital.
+        Capital-adaptive position sizing with ATR-based stop-loss.
+        Falls back to fixed SL/TP if ATR fetch fails.
         """
-        stop_loss   = round(current_price * (1 - STOP_LOSS_PCT),   2)
-        take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2)
         tier_params = get_capital_tier(total_equity)
         tier        = tier_params['tier']
+
+        # Compute ATR-based stops upfront (or fall back to fixed)
+        if symbol:
+            stop_loss, take_profit, sl_method = compute_atr_stops(symbol, current_price)
+        else:
+            stop_loss   = round(current_price * (1 - STOP_LOSS_PCT),   2)
+            take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2)
+            sl_method   = 'fixed'
 
         def reject(reason: str, suggestion: str = '') -> RiskDecision:
             logger.warning(f"Trade rejected (Tier {tier}): {reason}")
@@ -110,6 +191,7 @@ class RiskManager:
                 position_size=0, quantity=0,
                 stop_loss=stop_loss, take_profit=take_profit,
                 risk_per_trade=0, tier=tier, suggestion=suggestion,
+                sl_method=sl_method,
             )
 
         # Hard stops
@@ -172,7 +254,7 @@ class RiskManager:
         logger.info(
             f"Risk approved (Tier {tier} / {tier_params['label']}): "
             f"qty={quantity} size=₹{actual_size:.2f} "
-            f"stop=₹{stop_loss} target=₹{take_profit}"
+            f"stop=₹{stop_loss} ({sl_method}) target=₹{take_profit}"
         )
 
         return RiskDecision(
@@ -182,6 +264,7 @@ class RiskManager:
             stop_loss=stop_loss, take_profit=take_profit,
             risk_per_trade=round(risk_amount, 2),
             tier=tier,
+            sl_method=sl_method,
         )
 
     def check_daily_budget(
