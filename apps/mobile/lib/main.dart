@@ -9,6 +9,7 @@ import 'features/signals/signals_screen.dart';
 import 'features/portfolio/portfolio_screen.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/settings/settings_screen.dart';
+import 'features/analytics/analytics_screen.dart';
 import 'shared/theme.dart';
 import 'shared/widgets/splash_screen.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -48,7 +49,7 @@ class _Shell extends ConsumerWidget {
     final idx = ref.watch(activeTabProvider);
     const screens = [
       DashboardScreen(), SignalsScreen(), PortfolioScreen(),
-      ChatScreen(), SettingsScreen(),
+      AnalyticsScreen(), ChatScreen(), SettingsScreen(),
     ];
     return Scaffold(
       body: IndexedStack(index: idx, children: screens),
@@ -68,6 +69,9 @@ class _Shell extends ConsumerWidget {
           NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined),
               selectedIcon: Icon(Icons.account_balance_wallet_rounded, color: AppColors.accent),
               label: 'Portfolio'),
+          NavigationDestination(icon: Icon(Icons.bar_chart_outlined),
+              selectedIcon: Icon(Icons.bar_chart_rounded, color: AppColors.accent),
+              label: 'Analytics'),
           NavigationDestination(icon: Icon(Icons.auto_awesome_outlined),
               selectedIcon: Icon(Icons.auto_awesome_rounded, color: AppColors.accent),
               label: 'Chat'),
