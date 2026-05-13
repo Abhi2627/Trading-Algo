@@ -42,3 +42,4 @@ python-jose==3.3.0
 pytest==8.3.3
 pytest-asyncio==0.24.0
 kaggle>=1.6.0
+kaggle>=1.6.0
