@@ -159,26 +159,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   },
                   orElse: () => const SizedBox.shrink(),
                 ),
-              GridView.count(
-                crossAxisCount: 2, shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 10, mainAxisSpacing: 10, childAspectRatio: 1.6,
-                children: [
-                  StatCard(label: 'Total Equity', value: _inr(wallet.totalEquity),
-                      icon: Icons.account_balance_wallet_outlined),
-                  StatCard(label: 'Cash Balance', value: _inr(wallet.cashBalance),
-                      icon: Icons.payments_outlined),
-                  StatCard(label: 'Realised P&L', value: _inr(wallet.realisedPnl),
-                      trend: wallet.realisedPnl >= 0 ? 'up' : 'down',
-                      icon: Icons.trending_up_rounded),
-                  StatCard(label: 'Drawdown',
-                      value: '${(wallet.drawdownPct * 100).toStringAsFixed(1)}%',
-                      trend: wallet.drawdownPct > 0.05 ? 'down' : 'up',
-                      icon: Icons.arrow_downward_rounded),
-                ],
-              ),
-              const SizedBox(height: 20),
-              // Low balance alert
+              _PortfolioSummaryCard(wallet: wallet),
+              const SizedBox(height: 16),
               if (wallet.cashBalance < 2000)
                 Container(
                   margin: const EdgeInsets.only(bottom: 16),
@@ -486,30 +468,201 @@ class _PositionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isProfit = position.unrealisedPnl >= 0;
+    final isProfit  = position.unrealisedPnl >= 0;
+    final color     = isProfit ? AppColors.green : AppColors.red;
+    final invested  = position.entryPrice * position.quantity;
+    final current   = position.currentPrice * position.quantity;
+    final ticker    = position.symbol.contains(':') ? position.symbol.split(':').last : position.symbol;
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.borderDef),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
-      child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(position.symbol, style: const TextStyle(
-              color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 13)),
-          Text('${position.quantity} shares',
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-        ])),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text('${isProfit ? '+' : ''}${position.unrealisedPnl.toStringAsFixed(0)}',
-              style: TextStyle(color: isProfit ? AppColors.green : AppColors.red,
-                  fontWeight: FontWeight.w700, fontSize: 13, fontFamily: 'monospace')),
-          Text('${position.pnlPct.toStringAsFixed(2)}%',
-              style: TextStyle(color: isProfit ? AppColors.green : AppColors.red, fontSize: 10)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Top row: symbol + P&L
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(ticker, style: const TextStyle(
+                color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 14)),
+            Text('${position.quantity} shares · ${position.tradeType}',
+                style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+          ])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text('${isProfit ? '+' : ''}₹${position.unrealisedPnl.toStringAsFixed(2)}',
+                style: TextStyle(color: color, fontWeight: FontWeight.w900,
+                    fontSize: 15, fontFamily: 'monospace')),
+            Text('${isProfit ? '+' : ''}${position.pnlPct.toStringAsFixed(2)}%',
+                style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
+          ]),
+        ]),
+        const SizedBox(height: 8),
+        // Bottom row: invested → current value
+        Row(children: [
+          Text('Invested ', style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+          Text(_inr(invested), style: const TextStyle(
+              color: AppColors.textSecondary, fontSize: 11, fontFamily: 'monospace')),
+          const SizedBox(width: 6),
+          const Icon(Icons.arrow_forward_rounded, size: 10, color: AppColors.textMuted),
+          const SizedBox(width: 6),
+          Text('Current ', style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+          Text(_inr(current), style: const TextStyle(
+              color: AppColors.textPrimary, fontSize: 11,
+              fontFamily: 'monospace', fontWeight: FontWeight.w700)),
+          const Spacer(),
+          Text('SL ₹${position.stopLoss.toStringAsFixed(0)}',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 9)),
+          const SizedBox(width: 8),
+          Text('TP ₹${position.takeProfit.toStringAsFixed(0)}',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 9)),
         ]),
       ]),
+    );
+  }
+}
+
+
+class _PortfolioSummaryCard extends StatelessWidget {
+  final WalletSummary wallet;
+  const _PortfolioSummaryCard({required this.wallet});
+
+  @override
+  Widget build(BuildContext context) {
+    final totalPnl  = wallet.unrealisedPnl + wallet.realisedPnl;
+    final invested  = wallet.investedBalance;
+    final current   = invested + wallet.unrealisedPnl;
+    final totalPct  = invested > 0 ? (totalPnl / invested) * 100 : 0.0;
+    final isUp      = totalPnl >= 0;
+    final pnlColor  = isUp ? AppColors.green : AppColors.red;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.borderDef),
+      ),
+      child: Column(children: [
+        // Invested → Current
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('INVESTED', style: TextStyle(color: AppColors.textMuted,
+                fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+            const SizedBox(height: 2),
+            Text(_inr(invested), style: const TextStyle(color: AppColors.textPrimary,
+                fontSize: 22, fontWeight: FontWeight.w900, fontFamily: 'monospace')),
+          ]),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            const Text('CURRENT VALUE', style: TextStyle(color: AppColors.textMuted,
+                fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+            const SizedBox(height: 2),
+            Text(_inr(current), style: const TextStyle(color: AppColors.textPrimary,
+                fontSize: 22, fontWeight: FontWeight.w900, fontFamily: 'monospace')),
+          ]),
+        ]),
+        const SizedBox(height: 12),
+        // P&L hero
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: pnlColor.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: pnlColor.withOpacity(0.25)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Row(children: [
+              Container(width: 32, height: 32,
+                decoration: BoxDecoration(
+                    color: pnlColor.withOpacity(0.15), shape: BoxShape.circle),
+                child: Icon(isUp ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+                    color: pnlColor, size: 16)),
+              const SizedBox(width: 10),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('TOTAL P&L', style: TextStyle(color: AppColors.textMuted,
+                    fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                Text('${isUp ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)}',
+                    style: TextStyle(color: pnlColor, fontSize: 18,
+                        fontWeight: FontWeight.w900, fontFamily: 'monospace')),
+              ]),
+            ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text('${isUp ? '+' : ''}${totalPct.toStringAsFixed(2)}%',
+                  style: TextStyle(color: pnlColor, fontSize: 22,
+                      fontWeight: FontWeight.w900, fontFamily: 'monospace')),
+              const Text('overall return', style: TextStyle(
+                  color: AppColors.textMuted, fontSize: 9)),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        // Pills row
+        Row(children: [
+          _Pill(label: 'Unrealised', value: wallet.unrealisedPnl, signed: true),
+          const SizedBox(width: 8),
+          _Pill(label: 'Realised', value: wallet.realisedPnl, signed: true),
+          const SizedBox(width: 8),
+          _Pill(label: 'Cash', value: wallet.cashBalance, signed: false, neutral: true),
+        ]),
+        const SizedBox(height: 12),
+        // Risk mode + equity footer
+        Divider(color: AppColors.borderDef, height: 1),
+        const SizedBox(height: 10),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Row(children: [
+            Container(width: 7, height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: wallet.riskMode == 'normal' ? AppColors.green
+                    : wallet.riskMode == 'conservative' ? AppColors.amber : AppColors.red,
+              )),
+            const SizedBox(width: 6),
+            Text(wallet.riskMode.toUpperCase(),
+                style: TextStyle(
+                  color: wallet.riskMode == 'normal' ? AppColors.green
+                      : wallet.riskMode == 'conservative' ? AppColors.amber : AppColors.red,
+                  fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+          ]),
+          Text('Equity ${_inr(wallet.totalEquity)} · Peak ${_inr(wallet.peakEquity)}',
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _Pill extends StatelessWidget {
+  final String label;
+  final double value;
+  final bool signed;
+  final bool neutral;
+  const _Pill({required this.label, required this.value,
+      required this.signed, this.neutral = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final isUp  = value >= 0;
+    final color = neutral ? AppColors.accent
+        : isUp ? AppColors.green : AppColors.red;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.elevated,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(children: [
+          Text(label, style: const TextStyle(color: AppColors.textMuted,
+              fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+          const SizedBox(height: 3),
+          Text('${signed && isUp ? '+' : ''}${_inr(value)}',
+              style: TextStyle(color: color, fontSize: 12,
+                  fontWeight: FontWeight.w800, fontFamily: 'monospace')),
+        ]),
+      ),
     );
   }
 }

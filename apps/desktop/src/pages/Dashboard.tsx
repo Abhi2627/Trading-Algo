@@ -1,28 +1,20 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { 
-  TrendingUp, 
-  Wallet as WalletIcon, 
-  Banknote, 
-  ArrowDownCircle,
-  AlertCircle,
-  AlertTriangle,
-  Clock
+import {
+  TrendingUp, TrendingDown, AlertCircle, AlertTriangle, Clock,
+  ChevronRight
 } from 'lucide-react';
 import { getWalletSummary, getTopPicks, getMarketStatus, TopPick } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
-import StatCard from '../components/StatCard';
 import SignalBadge from '../components/SignalBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
 
-const formatINR = (value: number) => {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(value);
-};
+const fmt = (v: number) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v);
+
+const fmtExact = (v: number) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -124,31 +116,110 @@ const Dashboard: React.FC = () => {
           </span>
         </div>
       )}
-      {/* Top Row: Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          label="Total Equity"
-          value={formatINR(wallet?.total_equity ?? 0)}
-          icon={<WalletIcon size={20} />}
-          trend="neutral"
-        />
-        <StatCard
-          label="Cash Balance"
-          value={formatINR(wallet?.cash_balance ?? 0)}
-          icon={<Banknote size={20} />}
-        />
-        <StatCard
-          label="Realized P&L"
-          value={formatINR(wallet?.realised_pnl ?? 0)}
-          trend={(wallet?.realised_pnl ?? 0) >= 0 ? 'up' : 'down'}
-          icon={<TrendingUp size={20} />}
-        />
-        <StatCard
-          label="Drawdown %"
-          value={`${(wallet?.drawdown_pct ?? 0).toFixed(2)}%`}
-          trend={(wallet?.drawdown_pct ?? 0) > 5 ? 'down' : 'up'}
-          icon={<ArrowDownCircle size={20} />}
-        />
+      {/* ── Kite-style Portfolio Summary ───────────────────────────── */}
+      <div className="bg-background-surface border border-border-default rounded-2xl p-6 space-y-5">
+
+        {/* Row 1: Invested → Current Value */}
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs font-bold text-text-muted uppercase tracking-wider mb-1">Total Invested</p>
+            <p className="text-2xl font-black font-mono text-text-primary">
+              {fmt(wallet?.invested_balance ?? 0)}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs font-bold text-text-muted uppercase tracking-wider mb-1">Current Value</p>
+            <p className="text-2xl font-black font-mono text-text-primary">
+              {fmt((wallet?.invested_balance ?? 0) + (wallet?.unrealised_pnl ?? 0))}
+            </p>
+          </div>
+        </div>
+
+        {/* Row 2: P&L hero */}
+        {(() => {
+          const totalPnl = (wallet?.unrealised_pnl ?? 0) + (wallet?.realised_pnl ?? 0);
+          const invested = wallet?.invested_balance ?? 0;
+          const totalPct = invested > 0 ? (totalPnl / invested) * 100 : 0;
+          const isUp = totalPnl >= 0;
+          return (
+            <div className={`rounded-xl px-5 py-4 flex items-center justify-between ${
+              isUp ? 'bg-green/10 border border-green/20' : 'bg-red/10 border border-red/20'
+            }`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center ${
+                  isUp ? 'bg-green/20' : 'bg-red/20'
+                }`}>
+                  {isUp
+                    ? <TrendingUp size={18} className="text-green" />
+                    : <TrendingDown size={18} className="text-red" />}
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-text-muted uppercase tracking-wider">Total P&amp;L</p>
+                  <p className={`text-xl font-black font-mono ${
+                    isUp ? 'text-green' : 'text-red'
+                  }`}>
+                    {isUp ? '+' : ''}{fmtExact(totalPnl)}
+                  </p>
+                </div>
+              </div>
+              <div className={`text-right`}>
+                <span className={`text-2xl font-black font-mono ${
+                  isUp ? 'text-green' : 'text-red'
+                }`}>
+                  {isUp ? '+' : ''}{totalPct.toFixed(2)}%
+                </span>
+                <p className="text-[10px] text-text-muted mt-0.5">overall return</p>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Row 3: pills — unrealised / realised / cash */}
+        <div className="grid grid-cols-3 gap-3">
+          {[{
+            label: 'Unrealised',
+            value: wallet?.unrealised_pnl ?? 0,
+            sub: 'open positions',
+          }, {
+            label: 'Realised',
+            value: wallet?.realised_pnl ?? 0,
+            sub: 'closed trades',
+          }, {
+            label: 'Cash',
+            value: wallet?.cash_balance ?? 0,
+            sub: 'available',
+            neutral: true,
+          }].map(({ label, value, sub, neutral }) => {
+            const isUp = value >= 0;
+            const color = neutral ? 'text-accent' : isUp ? 'text-green' : 'text-red';
+            return (
+              <div key={label} className="bg-background-elevated rounded-xl p-3 text-center">
+                <p className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">{label}</p>
+                <p className={`text-sm font-black font-mono ${color}`}>
+                  {!neutral && (isUp ? '+' : '')}{fmt(value)}
+                </p>
+                <p className="text-[10px] text-text-muted mt-0.5">{sub}</p>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Row 4: risk mode + tier */}
+        <div className="flex items-center justify-between pt-1 border-t border-border-default">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full animate-pulse ${
+              wallet?.risk_mode === 'normal' ? 'bg-green' :
+              wallet?.risk_mode === 'conservative' ? 'bg-amber' : 'bg-red'
+            }`} />
+            <span className={`text-xs font-bold uppercase ${
+              wallet?.risk_mode === 'normal' ? 'text-green' :
+              wallet?.risk_mode === 'conservative' ? 'text-amber' : 'text-red'
+            }`}>{wallet?.risk_mode} mode</span>
+          </div>
+          <span className="text-xs text-text-muted">
+            Equity {fmt(wallet?.total_equity ?? 0)} · Peak {fmt(wallet?.peak_equity ?? 0)}
+          </span>
+        </div>
       </div>
 
       {/* Middle Section: Today's Top Picks */}
@@ -209,90 +280,117 @@ const Dashboard: React.FC = () => {
         )}
       </section>
 
-      {/* Bottom Section: Positions & Risk */}
+      {/* Positions + Risk */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Open Positions Table */}
+        {/* Open Positions — Kite style */}
         <div className="lg:col-span-2 bg-background-surface border border-border-default rounded-xl overflow-hidden">
-          <div className="p-5 border-b border-border-default">
+          <div className="px-5 py-4 border-b border-border-default flex items-center justify-between">
             <h2 className="font-bold">Open Positions</h2>
+            <span className="text-xs text-text-muted">{wallet?.open_positions?.length ?? 0} position{(wallet?.open_positions?.length ?? 0) !== 1 ? 's' : ''}</span>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="text-xs text-text-muted uppercase bg-background-elevated/50">
-                <tr>
-                  <th className="px-6 py-4 font-medium">Symbol</th>
-                  <th className="px-6 py-4 font-medium text-right">Qty</th>
-                  <th className="px-6 py-4 font-medium text-right">Entry</th>
-                  <th className="px-6 py-4 font-medium text-right">Current</th>
-                  <th className="px-6 py-4 font-medium text-right">P&L</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-default">
-                {wallet?.open_positions.map((pos) => (
-                  <tr key={pos.trade_id} className="hover:bg-background-elevated/30 transition-colors">
-                    <td className="px-6 py-4 font-bold">{pos.symbol}</td>
-                    <td className="px-6 py-4 text-right font-mono">{pos.quantity}</td>
-                    <td className="px-6 py-4 text-right font-mono">{formatINR(pos.entry_price)}</td>
-                    <td className="px-6 py-4 text-right font-mono">{formatINR(pos.current_price)}</td>
-                    <td className={`px-6 py-4 text-right font-bold font-mono ${pos.unrealised_pnl >= 0 ? 'text-green' : 'text-red'}`}>
-                      {pos.unrealised_pnl >= 0 ? '+' : ''}{formatINR(pos.unrealised_pnl)}
-                      <div className="text-[10px] opacity-80">{pos.pnl_pct.toFixed(2)}%</div>
-                    </td>
-                  </tr>
-                ))}
-                {(!wallet?.open_positions || wallet.open_positions.length === 0) && (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-text-muted italic">
-                      No open positions
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          {(!wallet?.open_positions || wallet.open_positions.length === 0) ? (
+            <div className="py-12 text-center text-text-muted italic text-sm">No open positions</div>
+          ) : (
+            <div className="divide-y divide-border-default">
+              {wallet.open_positions.map((pos) => {
+                const invested = pos.entry_price * pos.quantity;
+                const current  = pos.current_price * pos.quantity;
+                const isUp = pos.unrealised_pnl >= 0;
+                return (
+                  <div key={pos.trade_id} className="px-5 py-4 hover:bg-background-elevated/30 transition-colors">
+                    <div className="flex items-start justify-between">
+                      {/* Left: symbol + meta */}
+                      <div>
+                        <div className="font-bold text-text-primary">{pos.symbol.split(':').pop()}</div>
+                        <div className="text-xs text-text-muted mt-0.5">
+                          {pos.quantity} shares &middot; {pos.trade_type}
+                        </div>
+                      </div>
+                      {/* Right: P&L */}
+                      <div className="text-right">
+                        <div className={`font-black font-mono text-base ${
+                          isUp ? 'text-green' : 'text-red'
+                        }`}>
+                          {isUp ? '+' : ''}{fmtExact(pos.unrealised_pnl)}
+                        </div>
+                        <div className={`text-xs font-bold ${
+                          isUp ? 'text-green' : 'text-red'
+                        }`}>
+                          {isUp ? '+' : ''}{pos.pnl_pct.toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+                    {/* Invested → Current row */}
+                    <div className="flex items-center gap-4 mt-2">
+                      <div>
+                        <span className="text-[10px] text-text-muted uppercase tracking-wider">Invested </span>
+                        <span className="text-xs font-mono text-text-secondary">{fmt(invested)}</span>
+                      </div>
+                      <ChevronRight size={12} className="text-text-muted" />
+                      <div>
+                        <span className="text-[10px] text-text-muted uppercase tracking-wider">Current </span>
+                        <span className="text-xs font-mono text-text-primary font-bold">{fmt(current)}</span>
+                      </div>
+                      <div className="ml-auto flex gap-3 text-[10px] text-text-muted">
+                        <span>SL {fmt(pos.stop_loss)}</span>
+                        <span>TP {fmt(pos.take_profit)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Risk Mode Indicator */}
-        <div className="bg-background-surface border border-border-default rounded-xl p-6 flex flex-col justify-between">
-          <div>
-            <h2 className="font-bold mb-6">Risk Management</h2>
-            <div className="flex flex-col items-center text-center p-8 bg-background-elevated rounded-2xl border border-border-subtle mb-6">
-              <div className={`w-3 h-3 rounded-full mb-3 animate-pulse ${
-                wallet?.risk_mode === 'normal' ? 'bg-green shadow-[0_0_12px_rgba(34,197,94,0.5)]' :
-                wallet?.risk_mode === 'conservative' ? 'bg-amber shadow-[0_0_12px_rgba(245,158,11,0.5)]' :
-                'bg-red shadow-[0_0_12px_rgba(239,68,68,0.5)]'
-              }`} />
-              <span className={`text-2xl font-black uppercase tracking-tighter ${
-                wallet?.risk_mode === 'normal' ? 'text-green' :
-                wallet?.risk_mode === 'conservative' ? 'text-amber' :
-                'text-red'
-              }`}>
-                {wallet?.risk_mode} Mode
-              </span>
-              <p className="text-xs text-text-secondary mt-2">
-                {wallet?.risk_mode === 'normal' ? 'All systems active — trading at full capacity' :
-                 wallet?.risk_mode === 'conservative' ? 'Reduced position sizing — low cash balance' :
-                 'Trading STOPPED — wallet empty or risk limit hit. Add funds and call /wallet/resume.'}
-              </p>
-            </div>
+        {/* Risk panel */}
+        <div className="bg-background-surface border border-border-default rounded-xl p-6 flex flex-col gap-5">
+          <h2 className="font-bold">Risk</h2>
+          <div className="flex flex-col items-center text-center p-6 bg-background-elevated rounded-xl border border-border-subtle">
+            <div className={`w-2.5 h-2.5 rounded-full mb-2 animate-pulse ${
+              wallet?.risk_mode === 'normal' ? 'bg-green shadow-[0_0_10px_rgba(34,197,94,0.5)]' :
+              wallet?.risk_mode === 'conservative' ? 'bg-amber shadow-[0_0_10px_rgba(245,158,11,0.5)]' :
+              'bg-red shadow-[0_0_10px_rgba(239,68,68,0.5)]'
+            }`} />
+            <span className={`text-lg font-black uppercase ${
+              wallet?.risk_mode === 'normal' ? 'text-green' :
+              wallet?.risk_mode === 'conservative' ? 'text-amber' : 'text-red'
+            }`}>{wallet?.risk_mode}</span>
+            <p className="text-xs text-text-muted mt-1">
+              {wallet?.risk_mode === 'normal' ? 'Full capacity' :
+               wallet?.risk_mode === 'conservative' ? 'Reduced sizing' :
+               'Trading stopped'}
+            </p>
           </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs font-medium">
-              <span className="text-text-secondary">Daily Drawdown</span>
-              <span className={(wallet?.drawdown_pct ?? 0) > 5 ? 'text-red' : 'text-text-primary'}>
-                {(wallet?.drawdown_pct ?? 0).toFixed(2)}% / 10.00%
-              </span>
+          <div className="space-y-3">
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-text-muted">Drawdown from peak</span>
+                <span className={(wallet?.drawdown_pct ?? 0) > 0.05 ? 'text-red font-bold' : 'text-text-primary'}>
+                  {((wallet?.drawdown_pct ?? 0) * 100).toFixed(2)}%
+                </span>
+              </div>
+              <div className="w-full bg-background-elevated h-2 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${
+                  (wallet?.drawdown_pct ?? 0) > 0.08 ? 'bg-red' :
+                  (wallet?.drawdown_pct ?? 0) > 0.05 ? 'bg-amber' : 'bg-accent'
+                }`} style={{ width: `${Math.min((wallet?.drawdown_pct ?? 0) * 500, 100)}%` }} />
+              </div>
+              <div className="text-[10px] text-text-muted mt-1">Halt at 20% · Conservative at 12%</div>
             </div>
-            <div className="w-full bg-background-elevated h-3 rounded-full overflow-hidden border border-border-default p-0.5">
-              <div 
-                className={`h-full rounded-full transition-all duration-1000 ${
-                  (wallet?.drawdown_pct || 0) > 8 ? 'bg-red' :
-                  (wallet?.drawdown_pct || 0) > 5 ? 'bg-amber' :
-                  'bg-accent'
-                }`}
-                style={{ width: `${Math.min((wallet?.drawdown_pct || 0) * 10, 100)}%` }}
-              />
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              {[{
+                label: 'Today loss budget',
+                value: fmt(wallet?.daily_budget?.remaining_loss_budget ?? 0),
+              }, {
+                label: 'Profit target',
+                value: fmt(wallet?.daily_budget?.profit_target ?? 0),
+              }].map(({ label, value }) => (
+                <div key={label} className="bg-background-elevated rounded-lg p-2.5">
+                  <div className="text-[10px] text-text-muted uppercase tracking-wider">{label}</div>
+                  <div className="text-xs font-bold font-mono text-text-primary mt-0.5">{value}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
