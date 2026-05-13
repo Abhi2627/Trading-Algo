@@ -82,7 +82,19 @@ celery_app.conf.beat_schedule = {
         ),
     },
 
-    # Stop-loss check every 15 min during market hours (9:15 AM – 3:30 PM IST)
+    # Real-time position monitor — starts at 9:15 AM, runs all session
+    # Polls every 30 seconds, exits automatically at 3:30 PM
+    "realtime-monitor": {
+        "task":    "workers.tasks.wallet_tasks.monitor_positions",
+        "schedule": crontab(
+            hour=9,
+            minute=15,
+            day_of_week="1-5",
+        ),
+    },
+
+    # Stop-loss check every 15 min — kept as safety fallback
+    # (catches anything the realtime monitor misses during restarts)
     "stop-loss-check": {
         "task":    "workers.tasks.wallet_tasks.check_stop_losses",
         "schedule": crontab(

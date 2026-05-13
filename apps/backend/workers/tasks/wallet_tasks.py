@@ -13,6 +13,21 @@ from workers.celery_app import celery_app, run_async
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="workers.tasks.wallet_tasks.monitor_positions")
+def monitor_positions():
+    """
+    Real-time position monitor — polls open positions every 30 seconds.
+    Runs from 9:15 AM to 3:30 PM IST, Mon-Fri.
+    Provides 30x better SL/TP response vs the 15-min Celery beat fallback.
+    """
+    return run_async(_monitor_positions_async())
+
+
+async def _monitor_positions_async() -> dict:
+    from services.market_data.price_monitor import run_price_monitor
+    return await run_price_monitor()
+
+
 @celery_app.task(name="workers.tasks.wallet_tasks.check_stop_losses")
 def check_stop_losses():
     """
