@@ -94,6 +94,11 @@ export interface DailyBudget {
   remaining_loss_budget: number;
 }
 
+export interface WalletAlert {
+  severity: 'warning' | 'critical';
+  message: string;
+}
+
 export interface WalletSummary {
   cash_balance: number;
   invested_balance: number;
@@ -109,6 +114,7 @@ export interface WalletSummary {
   daily_budget: DailyBudget;
   open_positions: Position[];
   open_count: number;
+  alert?: WalletAlert;
 }
 
 export interface TopPick {
