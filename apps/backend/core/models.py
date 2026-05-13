@@ -345,7 +345,7 @@ class PredictionOutcome(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     signal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("signal.id"))
-    report_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("daily_report.id"))
+    report_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("daily_report.id"), nullable=True)
     predicted_direction: Mapped[str] = mapped_column(String)               # up / down / sideways
     predicted_delta_pct: Mapped[float] = mapped_column(Float)              # e.g. +1.8
     actual_delta_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # filled at close

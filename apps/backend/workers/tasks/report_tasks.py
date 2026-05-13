@@ -201,6 +201,13 @@ async def _evening_report_async() -> dict:
             llm_narrative=narrative,
         )
         db.add(report)
+        await db.flush()  # get report.id before linking outcomes
+
+        # Link scored outcomes to this evening report
+        for outcome, _, _ in rows:
+            if outcome.outcome != OutcomeResult.pending:
+                outcome.report_id = report.id
+
         await db.commit()
 
     logger.info(f"Evening report generated: accuracy={accuracy:.1f}%" if accuracy else "Evening report generated")

@@ -264,6 +264,19 @@ async def resume_trading(
     return await get_wallet_service().resume_trading(db)
 
 
+@router.post("/retrain")
+async def trigger_retrain(
+    _: str = Security(verify_key),
+):
+    """
+    Manually trigger ML model retraining via Kaggle.
+    Runs asynchronously — check Celery logs for progress.
+    """
+    from workers.tasks.retrain_tasks import retrain_models
+    task = retrain_models.delay()
+    return {"queued": True, "task_id": task.id, "message": "Retraining queued — check logs for progress (up to 2 hrs)"}
+
+
 @router.get("/analytics")
 async def get_analytics(
     db: AsyncSession = Depends(get_db),

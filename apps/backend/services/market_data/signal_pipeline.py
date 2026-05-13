@@ -190,6 +190,20 @@ async def generate_signal(
     db.add(signal)
     await db.flush()
 
+    # Create a pending PredictionOutcome row so the evening report can score it.
+    # predicted_direction: up if BUY, down if SELL, sideways if HOLD
+    # predicted_delta_pct: ensemble_score as a proxy for expected move magnitude
+    from core.models import PredictionOutcome, OutcomeResult
+    _direction_map = {'buy': 'up', 'sell': 'down', 'hold': 'sideways'}
+    _predicted_dir = _direction_map.get(result_signal['action'], 'sideways')
+    db.add(PredictionOutcome(
+        signal_id           = signal.id,
+        report_id           = None,   # linked to evening report when scored
+        predicted_direction = _predicted_dir,
+        predicted_delta_pct = round(result_signal['ensemble_score'] * 2, 3),  # rough estimate
+        outcome             = OutcomeResult.pending,
+    ))
+
     logger.info(
         f"Signal: {symbol} {result_signal['action'].upper()} "
         f"conf={result_signal['confidence']:.2f} "

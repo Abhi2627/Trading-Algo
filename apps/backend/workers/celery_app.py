@@ -21,6 +21,7 @@ celery_app = Celery(
         "workers.tasks.market_tasks",
         "workers.tasks.report_tasks",
         "workers.tasks.wallet_tasks",
+        "workers.tasks.retrain_tasks",
     ],
 )
 
@@ -116,6 +117,16 @@ celery_app.conf.beat_schedule = {
         "task":    "workers.tasks.report_tasks.generate_weekly_report",
         "schedule": crontab(
             hour=19,
+            minute=0,
+            day_of_week=0,   # Sunday
+        ),
+    },
+
+    # Weekly model retraining — runs after weekly report, Sunday 8 PM
+    "weekly-retrain": {
+        "task":    "workers.tasks.retrain_tasks.retrain_models",
+        "schedule": crontab(
+            hour=20,
             minute=0,
             day_of_week=0,   # Sunday
         ),

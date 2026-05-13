@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     INTRADAY_ALLOCATION_PCT: float = 0.25
     POSITIONAL_ALLOCATION_PCT: float = 0.75
 
+    # Kaggle — for model retraining pipeline
+    KAGGLE_USERNAME: str = ""
+    KAGGLE_API_KEY: str = ""
+    KAGGLE_NOTEBOOK_ID: str = ""  # e.g. abhi2627/algotrade-transformer-retrain
+    KAGGLE_DATASET_ID: str = ""   # e.g. abhi2627/algotrade-signal-outcomes
+
     # Report schedule (IST, 24hr)
     MORNING_REPORT_HOUR: int = 8
     MORNING_REPORT_MINUTE: int = 30
