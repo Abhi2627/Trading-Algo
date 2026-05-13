@@ -262,3 +262,147 @@ async def resume_trading(
     Only works if cash balance > 0.
     """
     return await get_wallet_service().resume_trading(db)
+
+
+@router.get("/analytics")
+async def get_analytics(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Signal performance analytics derived from closed signal_outcome rows.
+    Powers the Analytics page in the Tauri desktop app.
+    """
+    from sqlalchemy import select, func
+    from core.models import SignalOutcome, OutcomeResult
+
+    # All closed outcomes
+    result = await db.execute(
+        select(SignalOutcome).where(
+            SignalOutcome.outcome != OutcomeResult.pending
+        ).order_by(SignalOutcome.closed_at)
+    )
+    outcomes = result.scalars().all()
+
+    if not outcomes:
+        return {
+            "total_trades":    0,
+            "win_rate":        0.0,
+            "avg_pnl_pct":     0.0,
+            "avg_win_pct":     0.0,
+            "avg_loss_pct":    0.0,
+            "profit_factor":   0.0,
+            "avg_days_held":   0.0,
+            "best_trade":      None,
+            "worst_trade":     None,
+            "by_exit_reason":  {},
+            "by_regime":       {},
+            "by_confidence":   {},
+            "equity_curve":    [],
+        }
+
+    wins  = [o for o in outcomes if o.outcome == OutcomeResult.correct]
+    loss  = [o for o in outcomes if o.outcome == OutcomeResult.wrong]
+
+    total_win_pct  = sum(o.pnl_pct or 0 for o in wins)
+    total_loss_pct = sum(o.pnl_pct or 0 for o in loss)
+    profit_factor  = (
+        round(total_win_pct / abs(total_loss_pct), 2)
+        if total_loss_pct < 0 else 999.0
+    )
+
+    # Best / worst trade
+    sorted_by_pnl = sorted(outcomes, key=lambda o: o.pnl_pct or 0)
+    worst = sorted_by_pnl[0]
+    best  = sorted_by_pnl[-1]
+
+    def outcome_dict(o: SignalOutcome) -> dict:
+        return {
+            "symbol":     o.symbol,
+            "pnl_pct":    round((o.pnl_pct or 0) * 100, 2),
+            "exit_reason": o.exit_reason,
+            "days_held":   o.days_held,
+            "opened_at":   o.opened_at.isoformat() if o.opened_at else None,
+        }
+
+    # By exit reason
+    by_exit: dict[str, dict] = {}
+    for o in outcomes:
+        key = o.exit_reason or 'unknown'
+        if key not in by_exit:
+            by_exit[key] = {"count": 0, "wins": 0, "total_pnl_pct": 0.0}
+        by_exit[key]["count"] += 1
+        by_exit[key]["total_pnl_pct"] += (o.pnl_pct or 0) * 100
+        if o.outcome == OutcomeResult.correct:
+            by_exit[key]["wins"] += 1
+    for k in by_exit:
+        by_exit[k]["win_rate"] = round(
+            by_exit[k]["wins"] / by_exit[k]["count"] * 100, 1
+        )
+        by_exit[k]["avg_pnl_pct"] = round(
+            by_exit[k]["total_pnl_pct"] / by_exit[k]["count"], 2
+        )
+
+    # By market regime
+    by_regime: dict[str, dict] = {}
+    for o in outcomes:
+        key = o.market_regime or 'unknown'
+        if key not in by_regime:
+            by_regime[key] = {"count": 0, "wins": 0}
+        by_regime[key]["count"] += 1
+        if o.outcome == OutcomeResult.correct:
+            by_regime[key]["wins"] += 1
+    for k in by_regime:
+        by_regime[k]["win_rate"] = round(
+            by_regime[k]["wins"] / by_regime[k]["count"] * 100, 1
+        )
+
+    # By confidence bucket (60-70%, 70-80%, 80-90%, 90%+)
+    buckets = [(0.6, 0.7, "60-70%"), (0.7, 0.8, "70-80%"),
+               (0.8, 0.9, "80-90%"), (0.9, 1.01, "90%+")]
+    by_conf: dict[str, dict] = {}
+    for lo, hi, label in buckets:
+        subset = [o for o in outcomes if lo <= o.signal_confidence < hi]
+        if not subset:
+            continue
+        w = sum(1 for o in subset if o.outcome == OutcomeResult.correct)
+        by_conf[label] = {
+            "count":    len(subset),
+            "win_rate": round(w / len(subset) * 100, 1),
+            "avg_pnl_pct": round(
+                sum((o.pnl_pct or 0) * 100 for o in subset) / len(subset), 2
+            ),
+        }
+
+    # Equity curve — cumulative realized PnL over time
+    equity_curve = []
+    cumulative = 0.0
+    for o in sorted(outcomes, key=lambda x: x.closed_at or x.opened_at):
+        cumulative += o.realized_pnl or 0
+        equity_curve.append({
+            "date":       (o.closed_at or o.opened_at).strftime("%Y-%m-%d"),
+            "cumulative_pnl": round(cumulative, 2),
+            "symbol":     o.symbol,
+            "pnl":        round((o.realized_pnl or 0), 2),
+        })
+
+    total = len(outcomes)
+    win_count = len(wins)
+
+    return {
+        "total_trades":  total,
+        "win_count":     win_count,
+        "loss_count":    len(loss),
+        "win_rate":      round(win_count / total * 100, 1),
+        "avg_pnl_pct":   round(sum((o.pnl_pct or 0) * 100 for o in outcomes) / total, 2),
+        "avg_win_pct":   round(total_win_pct * 100  / len(wins),  2) if wins  else 0.0,
+        "avg_loss_pct":  round(total_loss_pct * 100 / len(loss), 2) if loss  else 0.0,
+        "profit_factor": profit_factor,
+        "avg_days_held": round(sum(o.days_held or 0 for o in outcomes) / total, 1),
+        "best_trade":    outcome_dict(best),
+        "worst_trade":   outcome_dict(worst),
+        "by_exit_reason": by_exit,
+        "by_regime":      by_regime,
+        "by_confidence":  by_conf,
+        "equity_curve":   equity_curve,
+    }

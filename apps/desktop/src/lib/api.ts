@@ -321,4 +321,27 @@ export const getTradeHistory = async (limit = 50): Promise<TradeHistory> => {
   return data;
 };
 
+export interface AnalyticsData {
+  total_trades:   number;
+  win_count:      number;
+  loss_count:     number;
+  win_rate:       number;
+  avg_pnl_pct:    number;
+  avg_win_pct:    number;
+  avg_loss_pct:   number;
+  profit_factor:  number;
+  avg_days_held:  number;
+  best_trade:     { symbol: string; pnl_pct: number; exit_reason: string; days_held: number } | null;
+  worst_trade:    { symbol: string; pnl_pct: number; exit_reason: string; days_held: number } | null;
+  by_exit_reason: Record<string, { count: number; wins: number; win_rate: number; avg_pnl_pct: number }>;
+  by_regime:      Record<string, { count: number; wins: number; win_rate: number }>;
+  by_confidence:  Record<string, { count: number; win_rate: number; avg_pnl_pct: number }>;
+  equity_curve:   Array<{ date: string; cumulative_pnl: number; symbol: string; pnl: number }>;
+}
+
+export const getAnalytics = async (): Promise<AnalyticsData> => {
+  const { data } = await api.get<AnalyticsData>('/wallet/analytics');
+  return data;
+};
+
 export default api;
