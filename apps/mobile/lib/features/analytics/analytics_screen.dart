@@ -1,7 +1,7 @@
 // features/analytics/analytics_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/api/api_client.dart';
+import '../../main.dart' show dioProvider;
 import '../../shared/theme.dart';
 
 class AnalyticsData {
