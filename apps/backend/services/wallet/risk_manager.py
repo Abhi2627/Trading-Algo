@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 STOP_LOSS_PCT    = 0.03   # Fallback fixed SL — used when ATR fetch fails
 TAKE_PROFIT_PCT  = 0.08   # Fallback fixed TP — used when ATR fetch fails
-MIN_CONFIDENCE   = 0.60   # Only quality signals
-TIME_EXIT_DAYS   = 3      # Exit after 3 days if not profitable
+MIN_CONFIDENCE   = 0.70   # Raised from 0.60 — real edge starts at 70%+
+TIME_EXIT_DAYS   = 7      # Raised from 3 — positional trades need time to play out
 
 # ATR-based SL/TP multipliers
 # SL = entry - ATR_SL_MULT * ATR(14)   → 2x ATR below entry
@@ -174,11 +174,11 @@ def get_capital_tier(total_equity: float) -> dict:
         return {
             'tier':            2,
             'label':           'Small',
-            'max_positions':   3,
-            'position_pct':    0.30,
-            'max_stock_price': total_equity * 0.40,
+            'max_positions':   2,      # reduced from 3 — less exposure at small capital
+            'position_pct':    0.25,   # reduced from 0.30 — 25% per trade max
+            'max_stock_price': total_equity * 0.35,
             'etf_only':        False,
-            'description':     'Large-cap + ETFs, up to 3 positions'
+            'description':     'Large-cap + ETFs, up to 2 positions'
         }
     elif total_equity < 200_000:
         return {
@@ -297,8 +297,11 @@ class RiskManager:
         # Position sizing — confidence weighted
         # Higher confidence → bigger position (40/35/25% split for Tier 2+)
         base_pct   = tier_params['position_pct']
-        # Scale position size by confidence: 60% conf = 0.75x, 80% conf = 1.0x, 95% conf = 1.2x
-        conf_scale = 0.5 + (min(confidence, 1.0) * 0.75)
+        # Conservative confidence scaling:
+        # 70% conf = 0.85x, 80% conf = 1.0x, 90%+ conf = 1.1x (capped)
+        # Never goes above 1.1x to prevent over-concentration
+        conf_scale = 0.6 + (min(confidence, 1.0) * 0.5)
+        conf_scale = min(conf_scale, 1.1)  # hard cap
         if risk_mode == RiskMode.conservative:
             conf_scale *= 0.5
 

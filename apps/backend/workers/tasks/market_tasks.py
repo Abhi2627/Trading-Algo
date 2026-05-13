@@ -206,11 +206,8 @@ async def _auto_execute_async() -> dict:
             date.today(), datetime.min.time()
         ).replace(tzinfo=timezone.utc)
 
-        # Confidence threshold per tier:
-        # Tier 1/2 (small capital): 65% — need more opportunities
-        # Tier 3/4 (larger capital): 60% — can afford to be less strict
-        # Stop-loss + trailing stop protect downside regardless
-        min_confidence = 0.65 if tier["tier"] <= 2 else 0.60
+        # Use the canonical MIN_CONFIDENCE from risk_manager — single source of truth
+        from services.wallet.risk_manager import MIN_CONFIDENCE as min_confidence
 
         signals_result = await db.execute(
             select(Signal, Asset)
@@ -219,31 +216,58 @@ async def _auto_execute_async() -> dict:
             .where(Signal.confidence >= min_confidence)
             .where(Signal.action == SignalAction.buy)
             .order_by(desc(Signal.ensemble_score))
-            .limit(20)  # top 20, will filter to slots_available
+            .limit(30)  # wider pool — filters will trim it down
         )
         top_signals = signals_result.all()
 
-        # Deduplicate signals: same symbol, keep highest confidence only
-        # Also prefer NSE over BSE
-        seen_tickers: dict = {}  # ticker -> (signal, asset)
+        # Deduplicate: same base ticker → keep highest confidence
+        # Also handles SBI family: SBIN, SBICARD, SBILIFE treated as DIFFERENT companies
+        # but NSE:SBIN and BSE:SBIN are the same stock → prefer NSE
+        seen_tickers: dict = {}
         for s, a in top_signals:
-            ticker = a.symbol.split(":")[-1]
+            ticker   = a.symbol.split(":")[-1]
             exchange = a.symbol.split(":")[0]
             if ticker not in seen_tickers:
                 seen_tickers[ticker] = (s, a)
             else:
                 existing_s, existing_a = seen_tickers[ticker]
                 existing_exchange = existing_a.symbol.split(":")[0]
-                # Prefer NSE over BSE, then higher confidence
                 if exchange == "NSE" and existing_exchange != "NSE":
                     seen_tickers[ticker] = (s, a)
                 elif exchange == existing_exchange and s.confidence > existing_s.confidence:
                     seen_tickers[ticker] = (s, a)
 
-        unique_signals = list(seen_tickers.values())
+        # Trend filter: only buy stocks in an uptrend
+        # Uptrend = price above EMA50 AND ADX > 20 (trending, not choppy)
+        # This prevents buying falling stocks hoping for a bounce
+        filtered_signals = []
+        for s, a in seen_tickers.values():
+            ti = s.technical_indicators or {}
+            close_vs_ema50 = ti.get('close_vs_ema50', 0)  # positive = above EMA50
+            adx            = ti.get('adx', 0)
+            rsi            = ti.get('rsi_14', 50)
+
+            # Reject if: below EMA50 (downtrend) OR RSI overbought (>75) OR ADX < 15 (no trend)
+            if close_vs_ema50 < 0:
+                logger.info(f"Trend filter: {a.symbol} rejected — price below EMA50 ({close_vs_ema50:.3f})")
+                results["skipped"].append({"symbol": a.symbol, "reason": "below_ema50"})
+                continue
+            if rsi > 75:
+                logger.info(f"Trend filter: {a.symbol} rejected — RSI overbought ({rsi:.1f})")
+                results["skipped"].append({"symbol": a.symbol, "reason": f"rsi_overbought_{rsi:.0f}"})
+                continue
+            if adx < 15:
+                logger.info(f"Trend filter: {a.symbol} rejected — ADX too low, choppy market ({adx:.1f})")
+                results["skipped"].append({"symbol": a.symbol, "reason": f"adx_too_low_{adx:.0f}"})
+                continue
+
+            filtered_signals.append((s, a))
+
+        unique_signals = sorted(filtered_signals, key=lambda x: x[0].ensemble_score, reverse=True)
 
         logger.info(
-            f"Found {len(unique_signals)} unique BUY signals ≥{min_confidence:.0%} confidence"
+            f"After dedup+trend filter: {len(unique_signals)}/{len(top_signals)} signals qualify "
+            f"(min_conf={min_confidence:.0%}, uptrend only)"
         )
 
         if not unique_signals:
