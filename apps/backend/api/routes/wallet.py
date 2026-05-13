@@ -299,19 +299,21 @@ async def get_analytics(
 
     if not outcomes:
         return {
-            "total_trades":    0,
-            "win_rate":        0.0,
-            "avg_pnl_pct":     0.0,
-            "avg_win_pct":     0.0,
-            "avg_loss_pct":    0.0,
-            "profit_factor":   0.0,
-            "avg_days_held":   0.0,
-            "best_trade":      None,
-            "worst_trade":     None,
-            "by_exit_reason":  {},
-            "by_regime":       {},
-            "by_confidence":   {},
-            "equity_curve":    [],
+            "total_trades":   0,
+            "win_count":      0,
+            "loss_count":     0,
+            "win_rate":       0.0,
+            "avg_pnl_pct":    0.0,
+            "avg_win_pct":    0.0,
+            "avg_loss_pct":   0.0,
+            "profit_factor":  0.0,
+            "avg_days_held":  0.0,
+            "best_trade":     None,
+            "worst_trade":    None,
+            "by_exit_reason": {},
+            "by_regime":      {},
+            "by_confidence":  {},
+            "equity_curve":   [],
         }
 
     wins  = [o for o in outcomes if o.outcome == OutcomeResult.correct]
