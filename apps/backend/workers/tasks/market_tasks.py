@@ -21,14 +21,31 @@ def scan_all_assets(self):
     Runs Mon–Fri at 8:30 AM IST.
     After scan completes, triggers auto_execute_trades.
     """
-    try:
-        result = run_async(_scan_all_assets_async())
-        # Auto-execute trades after scan if market is open
-        auto_execute_trades.delay()
-        return result
-    except Exception as exc:
-        logger.error(f"scan_all_assets failed: {exc}")
-        raise self.retry(exc=exc, countdown=60)
+    import asyncio, threading
+    result = {}
+    exc_holder = [None]
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_scan_all_assets_async()))
+        except Exception as e:
+            exc_holder[0] = e
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+
+    if exc_holder[0]:
+        raise self.retry(exc=exc_holder[0], countdown=60)
+
+    auto_execute_trades.delay()
+    return result
 
 
 async def _scan_all_assets_async() -> dict:
@@ -90,25 +107,32 @@ async def _scan_all_assets_async() -> dict:
 @celery_app.task(name="workers.tasks.market_tasks.auto_execute_trades", bind=True, max_retries=1)
 def auto_execute_trades(self):
     """
-    Fully automated trade execution.
-    Runs after every morning scan.
-    No human intervention needed.
-
-    Logic:
-      1. Check market is open (skip on weekends/holidays)
-      2. Check wallet has cash and is not halted
-      3. Find today's top BUY signals above confidence threshold
-      4. For each signal, run risk checks and open trade if approved
-      5. Log every decision with reason (transparency)
-
-    This is the core of the autonomous trading system.
+    Fully automated trade execution after morning scan.
     """
-    try:
-        result = run_async(_auto_execute_async())
-        return result
-    except Exception as exc:
-        logger.error(f"auto_execute_trades failed: {exc}")
-        raise self.retry(exc=exc, countdown=120)
+    import asyncio, threading
+    result = {}
+    exc_holder = [None]
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_auto_execute_async()))
+        except Exception as e:
+            exc_holder[0] = e
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+
+    if exc_holder[0]:
+        raise self.retry(exc=exc_holder[0], countdown=120)
+
+    return result
 
 
 async def _auto_execute_async() -> dict:

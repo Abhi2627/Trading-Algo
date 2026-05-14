@@ -49,15 +49,23 @@ async def _monitor_positions_async() -> dict:
 @celery_app.task(name="workers.tasks.wallet_tasks.check_stop_losses")
 def check_stop_losses():
     """
-    Check all open trades against current prices.
-    - Fixed stop-loss at -5% from entry (protects against big losses)
-    - Trailing stop activates once trade is +7% in profit
-      Trail sits 6% below the highest price seen since entry
-      This locks in profits as price rises
-    - Take-profit at +20% (let winners run further than original +9%)
-    Runs every 15 min during market hours Mon-Fri.
+    Check all open trades against current prices every 15 min (safety fallback).
     """
-    return run_async(_check_stop_losses_async())
+    import asyncio, threading
+    result = {}
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_check_stop_losses_async()))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    return result
 
 
 async def _check_stop_losses_async() -> dict:
@@ -192,11 +200,21 @@ async def _check_stop_losses_async() -> dict:
 
 @celery_app.task(name="workers.tasks.wallet_tasks.force_close_intraday")
 def force_close_intraday():
-    """
-    Force-close all open intraday positions at 3:15 PM IST.
-    NSE rule: intraday positions must be closed before market close.
-    """
-    return run_async(_force_close_intraday_async())
+    import asyncio, threading
+    result = {}
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_force_close_intraday_async()))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    return result
 
 
 async def _force_close_intraday_async() -> dict:
@@ -233,11 +251,21 @@ async def _force_close_intraday_async() -> dict:
 
 @celery_app.task(name="workers.tasks.wallet_tasks.apply_monthly_topup")
 def apply_monthly_topup():
-    """
-    Add monthly top-up to the paper wallet.
-    Runs on the 1st of each month at 9:00 AM IST.
-    """
-    return run_async(_apply_topup_async())
+    import asyncio, threading
+    result = {}
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_apply_topup_async()))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    return result
 
 
 async def _apply_topup_async() -> dict:
