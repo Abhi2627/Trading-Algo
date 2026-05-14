@@ -18,9 +18,27 @@ def monitor_positions():
     """
     Real-time position monitor — polls open positions every 30 seconds.
     Runs from 9:15 AM to 3:30 PM IST, Mon-Fri.
-    Provides 30x better SL/TP response vs the 15-min Celery beat fallback.
+    Runs in its own thread with a dedicated event loop to avoid
+    conflicting with other Celery tasks on the same worker.
     """
-    return run_async(_monitor_positions_async())
+    import asyncio
+    import threading
+
+    result = {}
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            nonlocal result
+            result = loop.run_until_complete(_monitor_positions_async())
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()  # block until market close (3:30 PM IST)
+    return result
 
 
 async def _monitor_positions_async() -> dict:
