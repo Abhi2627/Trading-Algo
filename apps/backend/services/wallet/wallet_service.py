@@ -155,6 +155,7 @@ class WalletService:
         stop_loss:    float,
         take_profit:  float,
         confidence:   float,
+        is_intraday:  bool = False,
     ) -> dict:
         """
         Open a trade with pre-computed quantity from the portfolio engine.
@@ -209,7 +210,7 @@ class WalletService:
         trade = Trade(
             asset_id    = asset.id,
             wallet_id   = wallet.id,
-            trade_type  = TradeType.positional,
+            trade_type  = TradeType.intraday if is_intraday else TradeType.positional,
             action      = TradeAction.buy,
             status      = TradeStatus.open,
             quantity    = quantity,

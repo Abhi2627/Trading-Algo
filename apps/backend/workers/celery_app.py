@@ -22,6 +22,7 @@ celery_app = Celery(
         "workers.tasks.report_tasks",
         "workers.tasks.wallet_tasks",
         "workers.tasks.retrain_tasks",
+        "workers.tasks.intraday_tasks",
     ],
 )
 
@@ -142,6 +143,31 @@ celery_app.conf.beat_schedule = {
             minute=0,
             day_of_week=0,   # Sunday
         ),
+    },
+
+    # ── Intraday strategy ────────────────────────────────────────────
+    # Monitor starts at 9:15 AM, runs until 3:15 PM, then exits
+    "intraday-monitor": {
+        "task":    "workers.tasks.intraday_tasks.intraday_monitor",
+        "schedule": crontab(hour=3, minute=45, day_of_week="1-5"),  # 9:15 AM IST
+    },
+    # Three VWAP breakout scans per day
+    "intraday-scan-open": {
+        "task":    "workers.tasks.intraday_tasks.intraday_scan",
+        "schedule": crontab(hour=3, minute=50, day_of_week="1-5"),  # 9:20 AM IST
+    },
+    "intraday-scan-midmorning": {
+        "task":    "workers.tasks.intraday_tasks.intraday_scan",
+        "schedule": crontab(hour=5, minute=30, day_of_week="1-5"),  # 11:00 AM IST
+    },
+    "intraday-scan-afternoon": {
+        "task":    "workers.tasks.intraday_tasks.intraday_scan",
+        "schedule": crontab(hour=7, minute=30, day_of_week="1-5"),  # 1:00 PM IST
+    },
+    # Force-close all intraday at 3:15 PM IST (replaces old intraday-force-close)
+    "intraday-force-close-new": {
+        "task":    "workers.tasks.intraday_tasks.intraday_force_close",
+        "schedule": crontab(hour=9, minute=45, day_of_week="1-5"),  # 3:15 PM IST
     },
 }
 
