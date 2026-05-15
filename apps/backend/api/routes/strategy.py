@@ -1,11 +1,18 @@
 # api/routes/strategy.py
-# Strategy tuning API — analyze outcomes and suggest parameter changes.
+import os
 import logging
-from fastapi import APIRouter, Security
-from api.auth import verify_key
+from fastapi import APIRouter, Security, HTTPException
+from fastapi.security.api_key import APIKeyHeader
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/strategy", tags=["strategy"])
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+async def verify_key(key: str = Security(api_key_header)):
+    if key != os.getenv("API_KEY"):
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    return key
 
 
 @router.get("/tune")
