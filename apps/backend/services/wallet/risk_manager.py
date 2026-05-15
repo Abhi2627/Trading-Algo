@@ -164,10 +164,10 @@ def get_capital_tier(total_equity: float) -> dict:
         return {
             'tier':            1,
             'label':           'Micro',
-            'max_positions':   1,
-            'position_pct':    0.90,   # use 90% on single position
-            'max_stock_price': total_equity * 0.95,  # stock must be affordable
-            'etf_only':        True,   # only ETFs and cheap stocks
+            'max_positions':   2,
+            'position_pct':    0.45,   
+            'max_stock_price': total_equity * 0.95,  
+            'etf_only':        False,   
             'description':     'ETF-focused, single position'
         }
     elif total_equity < 50_000:
@@ -232,7 +232,8 @@ class RiskManager:
         is_intraday:          bool = False,
         existing_open_trades: int  = 0,
         symbol:               str  = '',
-        open_trade_symbols:   list = None,  # for sector concentration check
+        open_trade_symbols:   list = None,
+        open_positions_heat:  list = None,  # actual position sizes for Kelly heat
     ) -> RiskDecision:
         """
         Capital-adaptive position sizing with ATR-based stop-loss.
@@ -294,36 +295,58 @@ class RiskManager:
                 )
             )
 
-        # Position sizing — confidence weighted
-        # Higher confidence → bigger position (40/35/25% split for Tier 2+)
-        base_pct   = tier_params['position_pct']
-        # Conservative confidence scaling:
-        # 70% conf = 0.85x, 80% conf = 1.0x, 90%+ conf = 1.1x (capped)
-        # Never goes above 1.1x to prevent over-concentration
-        conf_scale = 0.6 + (min(confidence, 1.0) * 0.5)
-        conf_scale = min(conf_scale, 1.1)  # hard cap
-        if risk_mode == RiskMode.conservative:
-            conf_scale *= 0.5
+        # ── Kelly Criterion position sizing ──────────────────────────────
+        # Replaces fixed conf_scale. Kelly sizes each bet based on:
+        #   - Signal confidence (win probability)
+        #   - Reward:Risk ratio (TP distance / SL distance)
+        #   - Current portfolio heat (total risk exposure)
+        # Uses half-Kelly (50% of full Kelly) for conservative sizing.
+        from services.wallet.kelly import compute_kelly, kelly_summary
 
-        position_size = min(
-            total_equity  * base_pct * conf_scale,
-            cash_balance  * 0.95,  # never use more than 95% of cash
+        sl_pct = (current_price - stop_loss)  / current_price
+        tp_pct = (take_profit  - current_price) / current_price
+
+        # Build open positions list for heat calculation
+        # Use actual sizes from wallet_service if available, else approximate
+        positions_for_heat = open_positions_heat or [
+            {'position_size': total_equity * 0.25, 'sl_pct': STOP_LOSS_PCT}
+            for _ in (open_trade_symbols or [])
+        ]
+
+        kelly = compute_kelly(
+            confidence       = confidence,
+            stop_loss_pct    = sl_pct,
+            take_profit_pct  = tp_pct,
+            total_equity     = total_equity,
+            cash_balance     = cash_balance,
+            current_price    = current_price,
+            open_positions   = positions_for_heat,
+            max_position_pct = tier_params['position_pct'],
         )
 
-        if position_size < current_price:
-            needed = current_price - cash_balance
+        logger.info(f"Kelly for {symbol or 'trade'}: {kelly_summary(kelly)}")
+
+        if not kelly.has_edge:
             return reject(
-                f"Need ₹{current_price:.2f} for 1 share, only ₹{position_size:.2f} available",
-                suggestion=(
-                    f"Add ₹{needed:.0f} more to your wallet, or look for stocks "
-                    f"under ₹{int(position_size):.0f}. "
-                    f"Nifty BeES trades around ₹240."
-                )
+                f"Insufficient edge: {kelly.reason}",
+                suggestion="Wait for a higher-confidence signal on this stock"
             )
 
-        quantity    = int(position_size // current_price)
-        actual_size = quantity * current_price
-        risk_amount = actual_size * STOP_LOSS_PCT
+        if kelly.heat_blocked and kelly.position_size == 0:
+            return reject(
+                f"Portfolio heat limit reached: {kelly.reason}",
+                suggestion="Close an existing position to free up risk budget"
+            )
+
+        if kelly.position_size < current_price or kelly.quantity == 0:
+            return reject(
+                kelly.reason,
+                suggestion=f"Add funds or look for stocks under ₹{int(kelly.position_size or cash_balance * 0.25)}"
+            )
+
+        quantity    = kelly.quantity
+        actual_size = kelly.position_size
+        risk_amount = actual_size * sl_pct
 
         logger.info(
             f"Risk approved (Tier {tier} / {tier_params['label']}): "

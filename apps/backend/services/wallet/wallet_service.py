@@ -9,7 +9,7 @@ from core.models import (
     PaperWallet, WalletTransaction, Trade, Signal, Asset, SignalOutcome,
     TransactionType, TradeStatus, TradeType, TradeAction, RiskMode, OutcomeResult,
 )
-from services.wallet.risk_manager import get_risk_manager
+from services.wallet.risk_manager import get_risk_manager, STOP_LOSS_PCT
 from services.market_data.fetcher import fetch_latest_price
 from services.wallet.charges import compute_charges, charges_preview
 
@@ -180,15 +180,23 @@ class WalletService:
         if current_price is None:
             return {"error": "Could not fetch current price"}
 
-        # Count open trades and collect their symbols for sector concentration check
+        # Count open trades and collect their symbols + sizes for Kelly heat calculation
         open_trades_q = await db.execute(
             select(Trade, Asset)
             .join(Asset, Trade.asset_id == Asset.id)
             .where(Trade.status == TradeStatus.open)
         )
-        open_rows   = open_trades_q.all()
-        open_count  = len(open_rows)
+        open_rows    = open_trades_q.all()
+        open_count   = len(open_rows)
         open_symbols = [a.symbol for _, a in open_rows]
+        open_positions_heat = [
+            {
+                'position_size': t.entry_price * t.quantity,
+                'sl_pct': (t.entry_price - t.stop_loss) / t.entry_price
+                          if t.stop_loss and t.entry_price else STOP_LOSS_PCT,
+            }
+            for t, _ in open_rows
+        ]
 
         daily_loss = await self._daily_realised_loss(db)
         budget     = rm.check_daily_budget(wallet.total_equity)
@@ -204,7 +212,8 @@ class WalletService:
             is_intraday=is_intraday,
             existing_open_trades=open_count,
             symbol=asset_symbol,
-            open_trade_symbols=open_symbols,   # enables sector concentration check
+            open_trade_symbols=open_symbols,
+            open_positions_heat=open_positions_heat,
         )
 
         if not decision.approved:
