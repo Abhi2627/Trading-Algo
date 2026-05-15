@@ -3,7 +3,7 @@
 import logging
 import sys
 import os
-from fastapi import APIRouter, Security, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
@@ -35,7 +35,6 @@ class BacktestRequest(BaseModel):
 @router.post("/run")
 async def run_backtest(
     req: BacktestRequest,
-    _: str = Security(lambda: None),  # auth handled at app level
 ):
     """
     Run a backtest with the given parameters.
