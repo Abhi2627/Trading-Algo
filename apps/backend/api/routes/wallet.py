@@ -277,6 +277,76 @@ async def trigger_retrain(
     return {"queued": True, "task_id": task.id, "message": "Retraining queued — check logs for progress (up to 2 hrs)"}
 
 
+
+@router.get("/portfolio-risk")
+async def get_portfolio_risk(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    from sqlalchemy import select
+    from core.models import Trade, Asset, TradeStatus, PaperWallet
+    from services.market_data.fetcher import fetch_historical, fetch_latest_price
+    from services.wallet.risk_manager import get_sector, STOP_LOSS_PCT
+    import numpy as np
+    import pandas as pd
+
+    wallet_r = await db.execute(select(PaperWallet).limit(1))
+    wallet = wallet_r.scalar_one_or_none()
+    if not wallet:
+        return {"positions": [], "heat": {"total": 0, "max": 20, "pct_used": 0}, "sector_exposure": {}, "correlation": {}, "risk_flags": []}
+
+    rows_r = await db.execute(select(Trade, Asset).join(Asset, Trade.asset_id == Asset.id).where(Trade.status == TradeStatus.open))
+    rows = rows_r.all()
+    if not rows:
+        return {"positions": [], "heat": {"total": 0, "max": 20, "pct_used": 0}, "sector_exposure": {}, "correlation": {}, "risk_flags": []}
+
+    positions = []
+    sector_exposure = {}
+    total_heat = 0.0
+    for trade, asset in rows:
+        price = fetch_latest_price(asset.symbol) or trade.entry_price
+        pnl = (price - trade.entry_price) * trade.quantity
+        size = trade.entry_price * trade.quantity
+        alloc = size / wallet.total_equity * 100 if wallet.total_equity else 0
+        sl_pct = (trade.entry_price - trade.stop_loss) / trade.entry_price * 100 if trade.stop_loss else 3.0
+        heat = alloc / 100 * sl_pct / 100
+        total_heat += heat
+        sector = get_sector(asset.symbol)
+        sector_exposure[sector] = round(sector_exposure.get(sector, 0) + alloc, 1)
+        positions.append({"trade_id": str(trade.id), "symbol": asset.symbol, "ticker": asset.symbol.split(":")[-1], "sector": sector, "trade_type": trade.trade_type.value, "quantity": trade.quantity, "entry_price": trade.entry_price, "current_price": round(price, 2), "pnl": round(pnl, 2), "pnl_pct": round((price - trade.entry_price) / trade.entry_price * 100, 2), "allocation_pct": round(alloc, 2), "sl_pct": round(sl_pct, 2), "heat": round(heat * 100, 3)})
+
+    correlation = {}
+    if len(rows) >= 2:
+        returns_map = {}
+        for trade, asset in rows:
+            ticker = asset.symbol.split(":")[-1]
+            try:
+                df = fetch_historical(asset.symbol, period_days=45, interval="1d")
+                if df is not None and len(df) >= 20:
+                    returns_map[ticker] = pd.Series(df["close"].values).pct_change().dropna().values[-30:].tolist()
+            except Exception:
+                pass
+        tickers = list(returns_map.keys())
+        if len(tickers) >= 2:
+            min_len = min(len(v) for v in returns_map.values())
+            mat = np.corrcoef([returns_map[t][-min_len:] for t in tickers])
+            for i, t1 in enumerate(tickers):
+                correlation[t1] = {tickers[j]: round(float(mat[i][j]), 3) for j in range(len(tickers))}
+
+    heat_pct = round(total_heat / 0.20 * 100, 1)
+    risk_flags = []
+    if heat_pct > 80:
+        risk_flags.append(f"Portfolio heat at {total_heat:.1%} approaching 20% limit")
+    for s, exp in sector_exposure.items():
+        if exp > 35:
+            risk_flags.append(f"{s} sector at {exp:.0f}% approaching 40% limit")
+    for t1, row in correlation.items():
+        for t2, r in row.items():
+            if t1 < t2 and r > 0.80:
+                risk_flags.append(f"{t1} & {t2} highly correlated (r={r:.2f})")
+
+    return {"positions": positions, "heat": {"total": round(total_heat * 100, 2), "max": 20, "pct_used": heat_pct}, "sector_exposure": sector_exposure, "correlation": correlation, "risk_flags": risk_flags}
+
 @router.get("/analytics")
 async def get_analytics(
     db: AsyncSession = Depends(get_db),
