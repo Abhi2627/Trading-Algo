@@ -147,6 +147,122 @@ class WalletService:
     # Trade execution
     # ------------------------------------------------------------------ #
 
+    async def open_trade_direct(
+        self,
+        db:           AsyncSession,
+        asset_symbol: str,
+        quantity:     int,
+        stop_loss:    float,
+        take_profit:  float,
+        confidence:   float,
+    ) -> dict:
+        """
+        Open a trade with pre-computed quantity from the portfolio engine.
+        Bypasses RiskManager sizing — portfolio engine already did Kelly allocation.
+        Still enforces: cash check, duplicate check, charge computation.
+        """
+        from services.market_data.fetcher import fetch_latest_price
+        from services.wallet.charges import compute_charges
+        from core.models import (
+            Trade, Asset, PaperWallet, WalletTransaction,
+            TradeStatus, TradeType, TradeAction, TransactionType, SignalOutcome, OutcomeResult
+        )
+        from sqlalchemy import select
+        import uuid, datetime
+
+        wallet = await self.get_or_create(db)
+
+        # Get asset
+        asset_result = await db.execute(select(Asset).where(Asset.symbol == asset_symbol))
+        asset = asset_result.scalar_one_or_none()
+        if not asset:
+            return {"approved": False, "reason": f"Asset {asset_symbol} not found"}
+
+        # Check not already holding
+        existing = await db.execute(
+            select(Trade)
+            .where(Trade.asset_id == asset.id)
+            .where(Trade.status == TradeStatus.open)
+        )
+        if existing.scalar_one_or_none():
+            return {"approved": False, "reason": f"Already holding {asset_symbol}"}
+
+        # Fetch current price
+        price = fetch_latest_price(asset_symbol)
+        if not price:
+            return {"approved": False, "reason": "Could not fetch price"}
+
+        position_size = quantity * price
+
+        # Cash check
+        if position_size > wallet.cash_balance:
+            return {"approved": False, "reason": f"Insufficient cash: need ₹{position_size:.0f}, have ₹{wallet.cash_balance:.0f}"}
+
+        # Compute charges
+        buy_charges = compute_charges(price, quantity, is_intraday=False, action='buy')
+        total_cost  = position_size + buy_charges.total
+
+        if total_cost > wallet.cash_balance:
+            return {"approved": False, "reason": "Insufficient cash after charges"}
+
+        # Open trade
+        trade = Trade(
+            asset_id    = asset.id,
+            wallet_id   = wallet.id,
+            trade_type  = TradeType.positional,
+            action      = TradeAction.buy,
+            status      = TradeStatus.open,
+            quantity    = quantity,
+            entry_price = price,
+            stop_loss   = stop_loss,
+            take_profit = take_profit,
+            entry_time  = datetime.datetime.now(datetime.timezone.utc),
+        )
+        db.add(trade)
+
+        # Debit cash
+        wallet.cash_balance     -= total_cost
+        wallet.invested_balance += position_size
+
+        # Transaction record
+        db.add(WalletTransaction(
+            wallet_id        = wallet.id,
+            transaction_type = TransactionType.trade_buy,
+            amount           = -total_cost,
+            description      = f"Buy {quantity} {asset_symbol} @ ₹{price:.2f}",
+        ))
+
+        await db.flush()
+
+        # Signal outcome row
+        db.add(SignalOutcome(
+            signal_id           = None,
+            trade_id            = trade.id,
+            symbol              = asset_symbol,
+            signal_action       = "buy",
+            signal_confidence   = confidence,
+            entry_price         = price,
+            outcome             = OutcomeResult.pending,
+            ensemble_score      = confidence,   # proxy
+            market_regime       = "unknown",
+        ))
+
+        logger.info(
+            f"open_trade_direct: {asset_symbol} qty={quantity} "
+            f"@ ₹{price:.2f} SL=₹{stop_loss} TP=₹{take_profit} "
+            f"cost=₹{total_cost:.2f}"
+        )
+
+        return {
+            "approved":       True,
+            "quantity":       quantity,
+            "entry_price":    price,
+            "position_size":  round(position_size, 2),
+            "stop_loss":      stop_loss,
+            "take_profit":    take_profit,
+            "cash_remaining": round(wallet.cash_balance, 2),
+        }
+
     async def open_trade(
         self,
         db:          AsyncSession,

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def scan_all_assets(self):
     """
     Generate signals for every active equity asset.
-    Runs Mon–Fri at 8:30 AM IST.
+    Runs Mon-Fri at 8:30 AM IST.
     After scan completes, triggers auto_execute_trades.
     """
     import asyncio, threading
@@ -85,8 +85,10 @@ async def _scan_all_assets_async() -> dict:
                 if signal:
                     results["generated"] += 1
                     logger.info(
-                        f"{asset.symbol}: {signal['action'].upper()} "
-                        f"confidence={signal['confidence']:.0%}"
+                        f"Signal: {asset.symbol} {signal['action'].upper()} "
+                        f"conf={signal['confidence']:.2f} "
+                        f"regime={signal.get('market_regime','?')} "
+                        f"fscore={signal.get('fundamental_score','?')}"
                     )
                 else:
                     results["skipped"] += 1
@@ -108,6 +110,7 @@ async def _scan_all_assets_async() -> dict:
 def auto_execute_trades(self):
     """
     Fully automated trade execution after morning scan.
+    Uses portfolio engine for dynamic allocation — no hardcoded position limits.
     """
     import asyncio, threading
     result = {}
@@ -159,7 +162,7 @@ async def _auto_execute_async() -> dict:
 
     # --- 1. Market hours check (IST) ---
     ist_now  = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-    weekday  = ist_now.weekday()  # 0=Mon, 6=Sun
+    weekday  = ist_now.weekday()
     NSE_HOLIDAYS = {
         "2025-10-02", "2025-10-21", "2025-10-22", "2025-11-05", "2025-12-25",
         "2026-01-26", "2026-03-19", "2026-04-02", "2026-04-03",
@@ -169,214 +172,198 @@ async def _auto_execute_async() -> dict:
 
     if weekday >= 5:
         results["reason"] = f"Weekend ({ist_now.strftime('%A')}) — no trading"
-        logger.info(results["reason"])
         return results
 
     if ist_now.date().isoformat() in NSE_HOLIDAYS:
         results["reason"] = f"NSE Holiday {ist_now.date()} — no trading"
-        logger.info(results["reason"])
         return results
 
     market_open  = ist_now.replace(hour=9,  minute=15, second=0)
     market_close = ist_now.replace(hour=15, minute=30, second=0)
     if not (market_open <= ist_now <= market_close):
         results["reason"] = f"Market closed at {ist_now.strftime('%H:%M')} IST"
-        logger.info(results["reason"])
         return results
 
     async with AsyncSessionLocal() as db:
         wallet_svc = get_wallet_service()
-
-        # --- 2. Wallet safety checks ---
         wallet = await wallet_svc.get_or_create(db)
 
         if wallet.risk_mode == RiskMode.halted:
-            results["reason"] = "Trading halted — wallet empty or risk limit hit"
-            logger.warning(results["reason"])
+            results["reason"] = "Trading halted"
             return results
 
-        if wallet.cash_balance < 100:  # Less than ₹100 cash
-            results["reason"] = f"Insufficient cash \u20b9{wallet.cash_balance:.0f} — need at least \u20b9100"
-            logger.warning(results["reason"])
+        if wallet.cash_balance < 100:
+            results["reason"] = f"Insufficient cash \u20b9{wallet.cash_balance:.0f}"
             return results
 
-        tier = get_capital_tier(wallet.total_equity)
         logger.info(
             f"Auto-execute: cash=\u20b9{wallet.cash_balance:.0f} "
-            f"equity=\u20b9{wallet.total_equity:.0f} "
-            f"tier={tier['tier']} ({tier['label']})"
+            f"equity=\u20b9{wallet.total_equity:.0f}"
         )
 
-        # --- 3. Count existing open positions ---
-        open_positions_result = await db.execute(
-            select(Trade).where(Trade.status == TradeStatus.open)
+        # Get open positions for heat calculation
+        open_result = await db.execute(
+            select(Trade, Asset)
+            .join(Asset, Trade.asset_id == Asset.id)
+            .where(Trade.status == TradeStatus.open)
         )
-        current_open = len(open_positions_result.scalars().all())
-        max_allowed  = tier["max_positions"]
+        open_rows = open_result.all()
 
-        if current_open >= max_allowed:
-            results["reason"] = (
-                f"Max positions reached ({current_open}/{max_allowed}) "
-                f"for Tier {tier['tier']}"
-            )
-            logger.info(results["reason"])
-            return results
+        # --- 4. Get today's signals and build candidates ---
+        from services.wallet.risk_manager import MIN_CONFIDENCE, get_sector, compute_atr_stops
+        from services.wallet.portfolio_engine import get_portfolio_engine, CandidateSignal
+        from services.market_data.fetcher import fetch_latest_price, fetch_historical
 
-        slots_available = max_allowed - current_open
-        logger.info(f"Open positions: {current_open}/{max_allowed} — {slots_available} slot(s) available")
-
-        # --- 4. Get today's top BUY signals ---
         today_start = datetime.combine(
             date.today(), datetime.min.time()
         ).replace(tzinfo=timezone.utc)
-
-        # Use the canonical MIN_CONFIDENCE from risk_manager — single source of truth
-        from services.wallet.risk_manager import MIN_CONFIDENCE as min_confidence
 
         signals_result = await db.execute(
             select(Signal, Asset)
             .join(Asset, Signal.asset_id == Asset.id)
             .where(Signal.created_at >= today_start)
-            .where(Signal.confidence >= min_confidence)
+            .where(Signal.confidence >= MIN_CONFIDENCE)
             .where(Signal.action == SignalAction.buy)
             .order_by(desc(Signal.ensemble_score))
-            .limit(30)  # wider pool — filters will trim it down
+            .limit(50)
         )
-        top_signals = signals_result.all()
+        raw_signals = signals_result.all()
 
-        # Deduplicate: same base ticker → keep highest confidence
-        # Also handles SBI family: SBIN, SBICARD, SBILIFE treated as DIFFERENT companies
-        # but NSE:SBIN and BSE:SBIN are the same stock → prefer NSE
-        seen_tickers: dict = {}
-        for s, a in top_signals:
+        # Deduplicate NSE/BSE duplicates
+        seen: dict = {}
+        for s, a in raw_signals:
             ticker   = a.symbol.split(":")[-1]
             exchange = a.symbol.split(":")[0]
-            if ticker not in seen_tickers:
-                seen_tickers[ticker] = (s, a)
-            else:
-                existing_s, existing_a = seen_tickers[ticker]
-                existing_exchange = existing_a.symbol.split(":")[0]
-                if exchange == "NSE" and existing_exchange != "NSE":
-                    seen_tickers[ticker] = (s, a)
-                elif exchange == existing_exchange and s.confidence > existing_s.confidence:
-                    seen_tickers[ticker] = (s, a)
+            if ticker not in seen or exchange == "NSE":
+                seen[ticker] = (s, a)
 
-        # Trend filter: only buy stocks in an uptrend
-        # Uptrend = price above EMA50 AND ADX > 20 (trending, not choppy)
-        # This prevents buying falling stocks hoping for a bounce
-        filtered_signals = []
-        for s, a in seen_tickers.values():
+        # Trend filter
+        candidates = []
+        for s, a in seen.values():
             ti = s.technical_indicators or {}
-            close_vs_ema50 = ti.get('close_vs_ema50', 0)  # positive = above EMA50
-            adx            = ti.get('adx', 0)
-            rsi            = ti.get('rsi_14', 50)
-
-            # Reject if: below EMA50 (downtrend) OR RSI overbought (>75) OR ADX < 15 (no trend)
-            if close_vs_ema50 < 0:
-                logger.info(f"Trend filter: {a.symbol} rejected — price below EMA50 ({close_vs_ema50:.3f})")
+            if ti.get("close_vs_ema50", 0) < 0:
                 results["skipped"].append({"symbol": a.symbol, "reason": "below_ema50"})
                 continue
-            if rsi > 75:
-                logger.info(f"Trend filter: {a.symbol} rejected — RSI overbought ({rsi:.1f})")
-                results["skipped"].append({"symbol": a.symbol, "reason": f"rsi_overbought_{rsi:.0f}"})
+            if ti.get("rsi_14", 50) > 75:
+                results["skipped"].append({"symbol": a.symbol, "reason": "rsi_overbought"})
                 continue
-            if adx < 15:
-                logger.info(f"Trend filter: {a.symbol} rejected — ADX too low, choppy market ({adx:.1f})")
-                results["skipped"].append({"symbol": a.symbol, "reason": f"adx_too_low_{adx:.0f}"})
+            if ti.get("adx", 0) < 15:
+                results["skipped"].append({"symbol": a.symbol, "reason": "adx_too_low"})
                 continue
-
-            filtered_signals.append((s, a))
-
-        unique_signals = sorted(filtered_signals, key=lambda x: x[0].ensemble_score, reverse=True)
+            price = fetch_latest_price(a.symbol)
+            if not price:
+                results["skipped"].append({"symbol": a.symbol, "reason": "no_price"})
+                continue
+            sl, tp, _ = compute_atr_stops(a.symbol, price)
+            sl_pct = (price - sl) / price
+            tp_pct = (tp - price) / price
+            candidates.append(CandidateSignal(
+                symbol         = a.symbol,
+                confidence     = s.confidence,
+                sl_pct         = sl_pct,
+                tp_pct         = tp_pct,
+                ensemble_score = s.ensemble_score,
+                sector         = get_sector(a.symbol),
+                current_price  = price,
+            ))
 
         logger.info(
-            f"After dedup+trend filter: {len(unique_signals)}/{len(top_signals)} signals qualify "
-            f"(min_conf={min_confidence:.0%}, uptrend only)"
+            f"{len(candidates)} candidates after trend filter "
+            f"({len(raw_signals)} raw, {MIN_CONFIDENCE:.0%} min conf)"
         )
 
-        if not unique_signals:
-            results["reason"] = f"No signals met the {min_confidence:.0%} confidence threshold"
-            logger.info(results["reason"])
+        if not candidates:
+            results["reason"] = "No signals passed trend filter"
             return results
 
-        # --- 5. Execute trades for top signals (fill ALL available slots) ---
-        trades_opened = 0
-        cash_exhausted = False
+        # --- 5. Portfolio engine dynamically allocates ---
+        open_positions_heat = [
+            {
+                "position_size": t.entry_price * t.quantity,
+                "sl_pct": (t.entry_price - t.stop_loss) / t.entry_price
+                           if t.stop_loss else 0.03,
+            }
+            for t, _ in open_rows
+        ]
 
-        # Fetch 2x signal pool so individual rejections don't block remaining slots.
-        # e.g. Tier 2 has 3 slots: if signal #1 is rejected for price, we still try #2 and #3.
-        for signal, asset in unique_signals[: slots_available * 2]:
-            if trades_opened >= slots_available:
-                break
-            if cash_exhausted:
-                break
-            if wallet.cash_balance < 100:
-                logger.info(f"Cash exhausted (₹{wallet.cash_balance:.0f}) — stopping")
-                break
+        engine     = get_portfolio_engine()
+        allocation = engine.construct(
+            signals          = candidates,
+            total_equity     = wallet.total_equity,
+            cash_balance     = wallet.cash_balance,
+            open_positions   = open_positions_heat,
+            fetch_history_fn = fetch_historical,
+        )
+        logger.info(allocation.explanation)
 
-            logger.info(
-                f"Attempting auto-trade [{trades_opened + 1}/{slots_available}]: {asset.symbol} "
-                f"conf={signal.confidence:.0%} "
-                f"score={signal.ensemble_score:.3f}"
-            )
+        for sig in allocation.rejected:
+            results["rejected"].append({"symbol": sig.symbol, "reason": sig.rejection_reason})
 
-            result = await wallet_svc.open_trade(
-                db=db,
-                signal_id=str(signal.id),
-                asset_symbol=asset.symbol,
-                is_intraday=False,  # always positional for small capital
-            )
+        if not allocation.allocations:
+            results["reason"] = allocation.explanation
+            return results
 
-            if result.get("approved"):
-                trades_opened += 1
-                results["executed"].append({
-                    "symbol":        asset.symbol,
-                    "quantity":      result["quantity"],
-                    "entry_price":   result["entry_price"],
-                    "position_size": result["position_size"],
-                    "stop_loss":     result["stop_loss"],
-                    "take_profit":   result["take_profit"],
-                    "confidence":    round(signal.confidence * 100, 1),
-                })
-                logger.info(
-                    f"AUTO-TRADE OPENED [{trades_opened}/{slots_available}]: {asset.symbol} "
-                    f"qty={result['quantity']} "
-                    f"@ \u20b9{result['entry_price']:.2f} "
-                    f"| SL \u20b9{result['stop_loss']} "
-                    f"| TP \u20b9{result['take_profit']} "
-                    f"| cash left \u20b9{result['cash_remaining']:.2f}"
+        # --- 6. Execute the portfolio engine plan ---
+        for sig in allocation.allocations:
+            try:
+                result = await wallet_svc.open_trade_direct(
+                    db           = db,
+                    asset_symbol = sig.symbol,
+                    quantity     = sig.quantity,
+                    stop_loss    = round(sig.current_price * (1 - sig.sl_pct), 2),
+                    take_profit  = round(sig.current_price * (1 + sig.tp_pct), 2),
+                    confidence   = sig.confidence,
                 )
-            else:
-                reason = result.get("reason", "unknown")
-                results["rejected"].append({
-                    "symbol": asset.symbol,
-                    "reason": reason,
-                })
-                logger.info(f"Auto-trade rejected for {asset.symbol}: {reason}")
-
-                # Only truly stop when cash is gone — price/tier rejections
-                # should NOT block the remaining open slot attempts.
-                if "cash" in reason.lower() and "insufficient" in reason.lower():
-                    logger.info("Stopping — insufficient cash for any more trades")
-                    cash_exhausted = True
+                if result.get("approved"):
+                    results["executed"].append({
+                        "symbol":         sig.symbol,
+                        "quantity":       sig.quantity,
+                        "entry_price":    sig.current_price,
+                        "position_size":  sig.position_size,
+                        "allocation_pct": round(sig.final_allocation * 100, 1),
+                        "kelly_pct":      round(sig.kelly_fraction * 100, 1),
+                        "confidence":     round(sig.confidence * 100, 1),
+                    })
+                    logger.info(
+                        f"OPENED [{len(results['executed'])}/{allocation.positions_out}]: "
+                        f"{sig.symbol} qty={sig.quantity} @ \u20b9{sig.current_price:.2f} "
+                        f"alloc={sig.final_allocation:.1%} kelly={sig.kelly_fraction:.1%}"
+                    )
+                else:
+                    results["rejected"].append({"symbol": sig.symbol, "reason": result.get("reason")})
+            except Exception as e:
+                logger.error(f"Failed to open {sig.symbol}: {e}")
+                results["rejected"].append({"symbol": sig.symbol, "reason": str(e)})
 
         await db.commit()
 
     results["reason"] = (
-        f"Executed {len(results['executed'])} trade(s), "
-        f"rejected {len(results['rejected'])}"
+        f"Portfolio engine: {allocation.positions_out} positions opened, "
+        f"{len(results['rejected'])} rejected. "
+        f"Heat: {allocation.existing_heat:.1%} -> {allocation.total_heat:.1%}"
     )
-    logger.info(f"Auto-execute complete: {results['reason']}")
+    logger.info(results["reason"])
     return results
 
 
 @celery_app.task(name="workers.tasks.market_tasks.generate_signal_for_symbol")
 def generate_signal_for_symbol(symbol: str, headlines: list = None):
-    """
-    On-demand signal generation for a single symbol.
-    Can be triggered manually from the API or chatbot.
-    """
-    return run_async(_generate_single(symbol, headlines or []))
+    """On-demand signal generation for a single symbol."""
+    import asyncio, threading
+    result = {}
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.update(loop.run_until_complete(_generate_single(symbol, headlines or [])) or {})
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            asyncio.set_event_loop(None)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    return result
 
 
 async def _generate_single(symbol: str, headlines: list) -> dict:
@@ -393,4 +380,3 @@ async def _generate_single(symbol: str, headlines: list) -> dict:
         if result:
             await db.commit()
         return result or {"error": f"Signal generation failed for {symbol}"}
-
