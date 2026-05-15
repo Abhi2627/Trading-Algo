@@ -277,6 +277,268 @@ async def trigger_retrain(
     return {"queued": True, "task_id": task.id, "message": "Retraining queued — check logs for progress (up to 2 hrs)"}
 
 
+@router.get("/portfolio-risk")
+async def get_portfolio_risk(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Live portfolio risk metrics:
+    - Correlation matrix between open positions
+    - Portfolio heat (total % capital at risk)
+    - Sector exposure breakdown
+    - Per-position Kelly fraction and sizing info
+    """
+    from sqlalchemy import select
+    from core.models import Trade, Asset, TradeStatus
+    from services.market_data.fetcher import fetch_historical, fetch_latest_price
+    from services.wallet.risk_manager import get_sector, STOP_LOSS_PCT
+    from services.wallet.portfolio_engine import MAX_PORTFOLIO_HEAT, MAX_SECTOR_EXPOSURE
+    import numpy as np
+    import pandas as pd
+
+    # Get open positions
+    result = await db.execute(
+        select(Trade, Asset)
+        .join(Asset, Trade.asset_id == Asset.id)
+        .where(Trade.status == TradeStatus.open)
+    )
+    rows = result.all()
+
+    if not rows:
+        return {
+            "positions":        [],
+            "correlation":      {},
+            "heat":             {"total": 0, "max": MAX_PORTFOLIO_HEAT, "pct_used": 0},
+            "sector_exposure": {},
+            "risk_summary":    "No open positions",
+        }
+
+    # Build position list with current prices
+    positions = []
+    total_equity_approx = 0
+    for trade, asset in rows:
+        price     = fetch_latest_price(asset.symbol) or trade.entry_price
+        cur_value = price * trade.quantity
+        cost      = trade.entry_price * trade.quantity
+        pnl       = cur_value - cost
+        sl_pct    = (trade.entry_price - trade.stop_loss) / trade.entry_price if trade.stop_loss else STOP_LOSS_PCT
+        heat      = (cost / 1) * sl_pct   # will normalize after
+        positions.append({
+            "trade_id":     str(trade.id),
+            "symbol":       asset.symbol,
+            "ticker":       asset.symbol.split(":")[-1],
+            "sector":       get_sector(asset.symbol),
+            "quantity":     trade.quantity,
+            "entry_price":  trade.entry_price,
+            "current_price": round(price, 2),
+            "cost":          round(cost, 2),
+            "current_value": round(cur_value, 2),
+            "unrealized_pnl": round(pnl, 2),
+            "pnl_pct":       round(pnl / cost * 100, 2) if cost else 0,
+            "sl_pct":        round(sl_pct * 100, 2),
+            "stop_loss":     trade.stop_loss,
+            "take_profit":   trade.take_profit,
+            "trade_type":    trade.trade_type.value,
+            "_cost_raw":     cost,
+            "_sl_pct_raw":   sl_pct,
+        })
+        total_equity_approx += cur_value
+
+    # Normalize heat using total portfolio value
+    # Get wallet equity for accurate % calculation
+    from services.wallet.wallet_service import get_wallet_service
+    wallet = await get_wallet_service().get_or_create(db)
+    equity = wallet.total_equity or total_equity_approx or 1
+
+    total_heat = 0
+    for pos in positions:
+        pos["allocation_pct"] = round(pos["_cost_raw"] / equity * 100, 1)
+        pos["heat"]           = round(pos["_cost_raw"] / equity * pos["_sl_pct_raw"] * 100, 2)
+        total_heat           += pos["_cost_raw"] / equity * pos["_sl_pct_raw"]
+        del pos["_cost_raw"]
+        del pos["_sl_pct_raw"]
+
+    # Sector exposure
+    sector_exp: dict[str, float] = {}
+    for pos in positions:
+        s = pos["sector"]
+        sector_exp[s] = round(sector_exp.get(s, 0) + pos["allocation_pct"], 1)
+
+    # Correlation matrix (fetch 30d daily returns)
+    symbols  = [p["symbol"] for p in positions]
+    corr_mat = {}
+    if len(symbols) >= 2:
+        returns = {}
+        for sym in symbols:
+            try:
+                df = fetch_historical(sym, period_days=60, interval="1d")
+                if df is not None and len(df) > 20:
+                    ret = pd.Series(df["close"].values).pct_change().dropna()
+                    returns[sym] = ret.values[-30:]  # last 30 days
+            except Exception:
+                pass
+
+        syms_with_data = list(returns.keys())
+        if len(syms_with_data) >= 2:
+            min_len = min(len(v) for v in returns.values())
+            mat = np.corrcoef([returns[s][-min_len:] for s in syms_with_data])
+            tickers = [s.split(":")[-1] for s in syms_with_data]
+            for i, t1 in enumerate(tickers):
+                corr_mat[t1] = {}
+                for j, t2 in enumerate(tickers):
+                    corr_mat[t1][t2] = round(float(mat[i][j]), 3)
+
+    heat_pct_used = round(total_heat / MAX_PORTFOLIO_HEAT * 100, 1)
+    risk_flags = []
+    if total_heat > MAX_PORTFOLIO_HEAT * 0.8:
+        risk_flags.append(f"Portfolio heat at {total_heat:.1%} — near limit ({MAX_PORTFOLIO_HEAT:.0%})")
+    for sector, exp in sector_exp.items():
+        if exp > MAX_SECTOR_EXPOSURE * 100 * 0.8:
+            risk_flags.append(f"{sector} sector at {exp:.0f}% — near limit ({MAX_SECTOR_EXPOSURE:.0%})")
+    for t1, row in corr_mat.items():
+        for t2, r in row.items():
+            if t1 < t2 and r > 0.75:
+                risk_flags.append(f"{t1} & {t2} highly correlated (r={r:.2f}) — concentrated bet")
+
+    # Clean up positions for response
+    for pos in positions:
+        pos.pop("_cost_raw", None)
+        pos.pop("_sl_pct_raw", None)
+
+    return {
+        "positions":      positions,
+        "correlation":    corr_mat,
+        "heat": {
+            "total":    round(total_heat * 100, 2),
+            "max":      round(MAX_PORTFOLIO_HEAT * 100, 0),
+            "pct_used": heat_pct_used,
+        },
+        "sector_exposure": sector_exp,
+        "risk_flags":      risk_flags,
+        "equity":          round(equity, 2),
+        "risk_summary":    (
+            f"{len(positions)} positions, heat {total_heat:.1%}/{MAX_PORTFOLIO_HEAT:.0%}, "
+            f"{len(risk_flags)} risk flag(s)"
+        ),
+    }
+
+
+@router.get("/portfolio-risk")
+async def get_portfolio_risk(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Live portfolio risk metrics: heat, correlation, sector exposure.
+    Powers the Live Portfolio Risk section in Analytics.
+    """
+    from core.models import Trade, Asset, TradeStatus
+    from sqlalchemy import select
+    from services.market_data.fetcher import fetch_latest_price, fetch_historical
+    from services.wallet.risk_manager import get_sector
+    import numpy as np
+    import pandas as pd
+
+    wallet_result = await db.execute(select(PaperWallet).limit(1))
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        return {"positions": [], "heat": {"total": 0, "max": 20, "pct_used": 0},
+                "sector_exposure": {}, "correlation": {}, "risk_flags": []}
+
+    open_result = await db.execute(
+        select(Trade, Asset)
+        .join(Asset, Trade.asset_id == Asset.id)
+        .where(Trade.status == TradeStatus.open)
+    )
+    rows = open_result.all()
+
+    if not rows:
+        return {"positions": [], "heat": {"total": 0, "max": 20, "pct_used": 0},
+                "sector_exposure": {}, "correlation": {}, "risk_flags": []}
+
+    positions = []
+    sector_exposure: dict[str, float] = {}
+    total_heat = 0.0
+
+    for trade, asset in rows:
+        price  = fetch_latest_price(asset.symbol) or trade.entry_price
+        pnl    = (price - trade.entry_price) * trade.quantity
+        pnl_pct = (price - trade.entry_price) / trade.entry_price * 100
+        size   = trade.entry_price * trade.quantity
+        alloc  = size / wallet.total_equity * 100
+        sl_pct = (trade.entry_price - trade.stop_loss) / trade.entry_price * 100 \
+                 if trade.stop_loss else 3.0
+        heat   = alloc / 100 * sl_pct
+        total_heat += heat
+        sector = get_sector(asset.symbol)
+        sector_exposure[sector] = sector_exposure.get(sector, 0) + alloc
+        ticker = asset.symbol.split(":")[-1]
+        positions.append({
+            "trade_id":      str(trade.id),
+            "symbol":        asset.symbol,
+            "ticker":        ticker,
+            "sector":        sector,
+            "trade_type":    trade.trade_type.value,
+            "quantity":      trade.quantity,
+            "entry_price":   trade.entry_price,
+            "current_price": round(price, 2),
+            "pnl":           round(pnl, 2),
+            "pnl_pct":       round(pnl_pct, 2),
+            "allocation_pct": round(alloc, 2),
+            "sl_pct":        round(sl_pct, 2),
+            "heat":          round(heat, 3),
+        })
+
+    # Correlation matrix from 30d daily returns
+    correlation: dict[str, dict[str, float]] = {}
+    if len(rows) >= 2:
+        returns_map: dict[str, list] = {}
+        for trade, asset in rows:
+            ticker = asset.symbol.split(":")[-1]
+            try:
+                df = fetch_historical(asset.symbol, period_days=45, interval="1d")
+                if df is not None and len(df) >= 20:
+                    ret = pd.Series(df["close"].values).pct_change().dropna().values[-30:]
+                    returns_map[ticker] = ret.tolist()
+            except Exception:
+                pass
+
+        tickers = list(returns_map.keys())
+        if len(tickers) >= 2:
+            min_len = min(len(v) for v in returns_map.values())
+            matrix  = np.corrcoef([returns_map[t][-min_len:] for t in tickers])
+            for i, t1 in enumerate(tickers):
+                correlation[t1] = {}
+                for j, t2 in enumerate(tickers):
+                    correlation[t1][t2] = round(float(matrix[i][j]), 3)
+
+    # Risk flags
+    risk_flags = []
+    heat_pct = total_heat / 0.20 * 100
+    if heat_pct > 80:
+        risk_flags.append(f"Portfolio heat at {total_heat:.1f}% — approaching 20% limit")
+    for sector, exp in sector_exposure.items():
+        if exp > 35:
+            risk_flags.append(f"{sector.replace('_',' ').title()} sector at {exp:.1f}% — approaching 40% limit")
+    for t1, corrs in correlation.items():
+        for t2, r in corrs.items():
+            if t1 < t2 and r > 0.80:
+                risk_flags.append(f"{t1} ↔ {t2} highly correlated (r={r:.2f}) — consider reducing one position")
+
+    return {
+        "positions":        positions,
+        "heat": {
+            "total":    round(total_heat, 3),
+            "max":      20,
+            "pct_used": round(heat_pct, 1),
+        },
+        "sector_exposure":  {k: round(v, 2) for k, v in sector_exposure.items()},
+        "correlation":      correlation,
+        "risk_flags":       risk_flags,
+    }
+
+
 @router.get("/analytics")
 async def get_analytics(
     db: AsyncSession = Depends(get_db),
@@ -318,6 +580,10 @@ async def get_analytics(
 
     wins  = [o for o in outcomes if o.outcome == OutcomeResult.correct]
     loss  = [o for o in outcomes if o.outcome == OutcomeResult.wrong]
+
+    # Split by strategy type (intraday vs positional)
+    intraday_outcomes  = [o for o in outcomes if 'intraday' in (o.market_regime or '')]
+    positional_outcomes = [o for o in outcomes if 'intraday' not in (o.market_regime or '')]
 
     total_win_pct  = sum(o.pnl_pct or 0 for o in wins)
     total_loss_pct = sum(o.pnl_pct or 0 for o in loss)
@@ -420,4 +686,22 @@ async def get_analytics(
         "by_regime":      by_regime,
         "by_confidence":  by_conf,
         "equity_curve":   equity_curve,
+        "by_strategy": {
+            "positional": {
+                "total":    len(positional_outcomes),
+                "wins":     sum(1 for o in positional_outcomes if o.outcome == OutcomeResult.correct),
+                "win_rate": round(sum(1 for o in positional_outcomes if o.outcome == OutcomeResult.correct) /
+                            max(len(positional_outcomes), 1) * 100, 1),
+                "avg_pnl":  round(sum((o.pnl_pct or 0)*100 for o in positional_outcomes) /
+                            max(len(positional_outcomes), 1), 2),
+            },
+            "intraday": {
+                "total":    len(intraday_outcomes),
+                "wins":     sum(1 for o in intraday_outcomes if o.outcome == OutcomeResult.correct),
+                "win_rate": round(sum(1 for o in intraday_outcomes if o.outcome == OutcomeResult.correct) /
+                            max(len(intraday_outcomes), 1) * 100, 1),
+                "avg_pnl":  round(sum((o.pnl_pct or 0)*100 for o in intraday_outcomes) /
+                            max(len(intraday_outcomes), 1), 2),
+            },
+        },
     }

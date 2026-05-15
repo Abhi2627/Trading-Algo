@@ -350,4 +350,70 @@ export const getAnalytics = async (): Promise<AnalyticsData> => {
   return data;
 };
 
+export interface PortfolioRisk {
+  positions: Array<{
+    trade_id:       string;
+    symbol:         string;
+    ticker:         string;
+    sector:         string;
+    trade_type:     string;
+    quantity:       number;
+    entry_price:    number;
+    current_price:  number;
+    pnl:            number;
+    pnl_pct:        number;
+    allocation_pct: number;
+    sl_pct:         number;
+    heat:           number;
+  }>;
+  heat: {
+    total:    number;
+    max:      number;
+    pct_used: number;
+  };
+  sector_exposure: Record<string, number>;
+  correlation:     Record<string, Record<string, number>>;
+  risk_flags:      string[];
+}
+
+export const getPortfolioRisk = async (): Promise<PortfolioRisk> => {
+  const { data } = await api.get<PortfolioRisk>('/wallet/portfolio-risk');
+  return data;
+};
+
+export interface PortfolioPosition {
+  trade_id:       string;
+  symbol:         string;
+  ticker:         string;
+  sector:         string;
+  quantity:       number;
+  entry_price:    number;
+  current_price:  number;
+  cost:           number;
+  current_value:  number;
+  unrealized_pnl: number;
+  pnl_pct:        number;
+  sl_pct:         number;
+  stop_loss:      number;
+  take_profit:    number;
+  trade_type:     string;
+  allocation_pct: number;
+  heat:           number;
+}
+
+export interface PortfolioRisk {
+  positions:       PortfolioPosition[];
+  correlation:     Record<string, Record<string, number>>;
+  heat:            { total: number; max: number; pct_used: number };
+  sector_exposure: Record<string, number>;
+  risk_flags:      string[];
+  equity:          number;
+  risk_summary:    string;
+}
+
+export const getPortfolioRisk = async (): Promise<PortfolioRisk> => {
+  const { data } = await api.get<PortfolioRisk>('/wallet/portfolio-risk');
+  return data;
+};
+
 export default api;
