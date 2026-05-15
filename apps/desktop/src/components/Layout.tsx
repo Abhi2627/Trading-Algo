@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  TrendingUp, 
-  Wallet, 
-  MessageSquare, 
-  Settings,
-  BarChart2,
+import {
+LayoutDashboard,
+TrendingUp,
+Wallet,
+MessageSquare,
+Settings,
+BarChart2,
+FlaskConical,
   Circle
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -39,12 +40,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const isConnected = !!health && !isError;
 
   const navLinks = [
-    { to: '/',          icon: LayoutDashboard, label: 'Dashboard' },
-    { to: '/signals',   icon: TrendingUp,      label: 'Signals' },
-    { to: '/portfolio', icon: Wallet,           label: 'Portfolio' },
-    { to: '/analytics', icon: BarChart2,        label: 'Analytics' },
-    { to: '/chat',      icon: MessageSquare,    label: 'Chat' },
-    { to: '/settings',  icon: Settings,         label: 'Settings' },
+    { to: '/',           icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/signals',    icon: TrendingUp,      label: 'Signals' },
+    { to: '/portfolio',  icon: Wallet,           label: 'Portfolio' },
+    { to: '/analytics',  icon: BarChart2,        label: 'Analytics' },
+    { to: '/backtest',   icon: FlaskConical,     label: 'Backtest' },
+    { to: '/chat',       icon: MessageSquare,    label: 'Chat' },
+    { to: '/settings',   icon: Settings,         label: 'Settings' },
   ];
 
   const formattedTime = currentTime.toLocaleString('en-IN', {

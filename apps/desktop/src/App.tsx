@@ -11,6 +11,7 @@ const Signals   = lazy(() => import('./pages/Signals'));
 const Portfolio = lazy(() => import('./pages/Portfolio'));
 const Chat      = lazy(() => import('./pages/Chat'));
 const Analytics = lazy(() => import('./pages/Analytics'));
+const Backtest  = lazy(() => import('./pages/Backtest'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -166,6 +167,7 @@ const App: React.FC = () => {
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/chat"      element={<Chat />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/backtest"  element={<Backtest />} />
                   <Route path="/settings"  element={<Settings />} />
                 </Routes>
               </Suspense>
