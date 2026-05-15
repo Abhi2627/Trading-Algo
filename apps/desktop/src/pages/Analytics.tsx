@@ -2,9 +2,10 @@ import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   TrendingUp, TrendingDown, Target, Award,
-  Clock, BarChart2, Zap, AlertCircle, RefreshCw
+  Clock, BarChart2, Zap, AlertCircle, RefreshCw,
+  Flame, PieChart, GitBranch, ShieldAlert
 } from 'lucide-react';
-import { getAnalytics, AnalyticsData } from '../lib/api';
+import { getAnalytics, getPortfolioRisk, AnalyticsData } from '../lib/api';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const pct = (n: number, decimals = 1) =>
@@ -162,6 +163,13 @@ const Analytics: React.FC = () => {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: risk } = useQuery({
+    queryKey: ['portfolio-risk'],
+    queryFn: getPortfolioRisk,
+    staleTime: 60 * 1000,   // refresh every minute
+    refetchInterval: 60 * 1000,
+  });
+
   if (isLoading) return <div className="h-full flex items-center justify-center"><LoadingSpinner size="lg" /></div>;
 
   if (isError) return (
@@ -192,6 +200,230 @@ const Analytics: React.FC = () => {
           <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
+
+      {/* ── Live Portfolio Risk ─────────────────────────────────────── */}
+      {risk && (
+        <div className="space-y-4">
+          <h2 className="font-bold text-text-primary flex items-center gap-2">
+            <Flame size={16} className="text-accent" /> Live Portfolio Risk
+          </h2>
+
+          {/* Risk flags */}
+          {risk.risk_flags.length > 0 && (
+            <div className="space-y-2">
+              {risk.risk_flags.map((flag, i) => (
+                <div key={i} className="flex items-start gap-3 bg-amber/10 border border-amber/20 rounded-lg px-4 py-3">
+                  <ShieldAlert size={14} className="text-amber shrink-0 mt-0.5" />
+                  <span className="text-xs text-amber font-medium">{flag}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Heat gauge */}
+            <div className="bg-background-surface border border-border-default rounded-xl p-5">
+              <h3 className="font-bold text-text-primary text-sm mb-4 flex items-center gap-2">
+                <Flame size={14} className="text-accent" /> Portfolio Heat
+              </h3>
+              <div className="flex flex-col items-center gap-3">
+                {/* Radial gauge via SVG */}
+                {(() => {
+                  const pct_used = risk.heat.pct_used;
+                  const color = pct_used > 80 ? '#ef4444' : pct_used > 60 ? '#f59e0b' : '#22c55e';
+                  const r = 40, cx = 52, cy = 52;
+                  const circ = 2 * Math.PI * r;
+                  const arc  = circ * 0.75;  // 270 degree arc
+                  const filled = arc * Math.min(pct_used / 100, 1);
+                  return (
+                    <div className="flex flex-col items-center gap-2">
+                      <svg width="104" height="84" viewBox="0 0 104 84">
+                        {/* Track */}
+                        <circle cx={cx} cy={cx} r={r} fill="none"
+                          stroke="#1e293b" strokeWidth="8"
+                          strokeDasharray={`${arc} ${circ}`}
+                          strokeDashoffset={-circ * 0.125}
+                          strokeLinecap="round" />
+                        {/* Fill */}
+                        <circle cx={cx} cy={cx} r={r} fill="none"
+                          stroke={color} strokeWidth="8"
+                          strokeDasharray={`${filled} ${circ}`}
+                          strokeDashoffset={-circ * 0.125}
+                          strokeLinecap="round"
+                          className="transition-all duration-1000" />
+                        <text x={cx} y={cx - 4} textAnchor="middle"
+                          fontSize="13" fontWeight="900" fontFamily="monospace"
+                          fill={color}>{pct_used.toFixed(0)}%</text>
+                        <text x={cx} y={cx + 10} textAnchor="middle"
+                          fontSize="8" fill="#6b7280">of max</text>
+                      </svg>
+                      <div className="text-center">
+                        <div className="text-xs text-text-muted">
+                          <span style={{color}} className="font-bold font-mono">{risk.heat.total.toFixed(2)}%</span>
+                          <span className="text-text-muted"> / {risk.heat.max}% limit</span>
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-1">
+                          Capital at risk if all SLs hit simultaneously
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Sector exposure */}
+            <div className="bg-background-surface border border-border-default rounded-xl p-5">
+              <h3 className="font-bold text-text-primary text-sm mb-4 flex items-center gap-2">
+                <PieChart size={14} className="text-accent" /> Sector Exposure
+              </h3>
+              <div className="space-y-3">
+                {Object.entries(risk.sector_exposure).length === 0 ? (
+                  <p className="text-xs text-text-muted italic text-center py-4">No positions</p>
+                ) : (
+                  Object.entries(risk.sector_exposure)
+                    .sort(([,a],[,b]) => b - a)
+                    .map(([sector, exp]) => (
+                      <div key={sector}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-text-secondary capitalize">{sector.replace(/_/g,' ')}</span>
+                          <span className={`font-bold font-mono ${
+                            exp > 32 ? 'text-amber' : 'text-text-primary'
+                          }`}>{exp.toFixed(1)}%</span>
+                        </div>
+                        <div className="w-full bg-background-elevated h-1.5 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full transition-all ${
+                            exp > 32 ? 'bg-amber' : 'bg-accent'
+                          }`} style={{width: `${Math.min(exp / 40 * 100, 100)}%`}} />
+                        </div>
+                      </div>
+                    ))
+                )}
+                <p className="text-[10px] text-text-muted pt-1 border-t border-border-default">
+                  Limit: 40% per sector
+                </p>
+              </div>
+            </div>
+
+            {/* Correlation matrix */}
+            <div className="bg-background-surface border border-border-default rounded-xl p-5">
+              <h3 className="font-bold text-text-primary text-sm mb-4 flex items-center gap-2">
+                <GitBranch size={14} className="text-accent" /> Correlation (30d)
+              </h3>
+              {Object.keys(risk.correlation).length < 2 ? (
+                <div className="flex flex-col items-center justify-center h-24 gap-2">
+                  <GitBranch size={24} className="text-text-muted opacity-30" />
+                  <p className="text-xs text-text-muted italic text-center">
+                    Need ≥2 positions for correlation analysis
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  {(() => {
+                    const tickers = Object.keys(risk.correlation);
+                    return (
+                      <table className="text-xs w-full">
+                        <thead>
+                          <tr>
+                            <th className="text-text-muted font-normal pb-2 text-left"></th>
+                            {tickers.map(t => (
+                              <th key={t} className="text-text-muted font-bold pb-2 text-center px-1">{t}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tickers.map(t1 => (
+                            <tr key={t1}>
+                              <td className="text-text-muted font-bold pr-2 py-1">{t1}</td>
+                              {tickers.map(t2 => {
+                                const r = risk.correlation[t1]?.[t2] ?? 0;
+                                const isdiag = t1 === t2;
+                                const color = isdiag ? 'text-text-muted' :
+                                  r > 0.75 ? 'text-red font-bold' :
+                                  r > 0.5  ? 'text-amber' :
+                                  r < -0.3 ? 'text-green' : 'text-text-secondary';
+                                const bg = isdiag ? 'bg-background-elevated' :
+                                  r > 0.75 ? 'bg-red/10' :
+                                  r > 0.5  ? 'bg-amber/10' : '';
+                                return (
+                                  <td key={t2}
+                                    className={`text-center px-2 py-1 rounded font-mono ${
+                                      color} ${bg}`}>
+                                    {isdiag ? '—' : r.toFixed(2)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
+                  <p className="text-[10px] text-text-muted mt-3 border-t border-border-default pt-2">
+                    <span className="text-red font-bold">&gt;0.75</span> = high risk ·
+                    <span className="text-amber"> 0.5–0.75</span> = moderate ·
+                    <span className="text-green"> negative</span> = diversified
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Per-position breakdown */}
+          {risk.positions.length > 0 && (
+            <div className="bg-background-surface border border-border-default rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-border-default">
+                <h3 className="font-bold text-text-primary text-sm">Position Risk Breakdown</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-background-elevated/50">
+                    <tr>
+                      {['Symbol','Sector','Type','Alloc %','Heat %','P&L','SL dist','Status'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-text-muted font-bold uppercase tracking-wider text-[10px]">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-default">
+                    {risk.positions.map(pos => (
+                      <tr key={pos.trade_id} className="hover:bg-background-elevated/20">
+                        <td className="px-4 py-3 font-bold text-text-primary">{pos.ticker}</td>
+                        <td className="px-4 py-3 text-text-muted capitalize">{pos.sector.replace(/_/g,' ')}</td>
+                        <td className="px-4 py-3">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            pos.trade_type === 'intraday'
+                              ? 'bg-accent/20 text-accent'
+                              : 'bg-background-elevated text-text-muted'
+                          }`}>{pos.trade_type}</span>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-text-primary">{pos.allocation_pct.toFixed(1)}%</td>
+                        <td className="px-4 py-3 font-mono">
+                          <span className={pos.heat > 1 ? 'text-amber font-bold' : 'text-text-secondary'}>
+                            {pos.heat.toFixed(2)}%
+                          </span>
+                        </td>
+                        <td className={`px-4 py-3 font-mono font-bold ${
+                          pos.pnl_pct >= 0 ? 'text-green' : 'text-red'
+                        }`}>{pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct.toFixed(2)}%</td>
+                        <td className="px-4 py-3 font-mono text-text-muted">{pos.sl_pct.toFixed(1)}%</td>
+                        <td className="px-4 py-3">
+                          {pos.pnl_pct >= 5 ? (
+                            <span className="text-[10px] text-green font-bold">🟢 Trending</span>
+                          ) : pos.pnl_pct <= -2 ? (
+                            <span className="text-[10px] text-red font-bold">🗔 Watch</span>
+                          ) : (
+                            <span className="text-[10px] text-text-muted">Holding</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {noData ? (
         <div className="bg-background-surface border border-dashed border-border-default rounded-xl p-16 text-center">
