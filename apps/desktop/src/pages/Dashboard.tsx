@@ -86,8 +86,8 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      {/* Low Balance Alert */}
-      {wallet?.alert && (
+      {/* Only show alert when system is actually halted */}
+      {wallet?.alert && wallet.risk_mode === 'halted' && (
         <div className={`border rounded-xl px-4 py-3 flex items-start gap-3 ${
           wallet.alert.severity === 'critical'
             ? 'bg-red/10 border-red/30'
