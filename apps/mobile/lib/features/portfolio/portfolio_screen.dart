@@ -53,12 +53,18 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
         loading: () => const LoadingState(),
         error:   (e, _) => ErrorState(
           message: 'Could not load portfolio.',
-          onRetry: () => ref.invalidate(walletProvider),
+          onRetry: () {
+            ref.invalidate(walletProvider);
+            ref.invalidate(tradeHistoryProvider);
+          },
         ),
         data: (wallet) => RefreshIndicator(
           color: AppColors.accent,
           backgroundColor: AppColors.surface,
-          onRefresh: () async => ref.invalidate(walletProvider),
+          onRefresh: () async {
+            ref.invalidate(walletProvider);
+            ref.invalidate(tradeHistoryProvider);
+          },
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [

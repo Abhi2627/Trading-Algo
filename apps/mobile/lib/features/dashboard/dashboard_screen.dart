@@ -111,7 +111,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           loading: () => const LoadingState(),
           error: (e, _) => ErrorState(
             message: 'Could not load wallet.\nMake sure the backend is running.',
-            onRetry: () => ref.invalidate(walletProvider),
+            onRetry: () {
+              ref.invalidate(walletProvider);
+              ref.invalidate(dashboardSignalsProvider);
+              ref.invalidate(marketStatusProvider);
+            },
           ),
           data: (wallet) {
             final marketAsync = ref.watch(marketStatusProvider);

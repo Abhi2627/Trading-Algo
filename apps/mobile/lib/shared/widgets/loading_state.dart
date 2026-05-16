@@ -26,19 +26,28 @@ class ErrorState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline_rounded, color: AppColors.red, size: 40),
-          const SizedBox(height: 12),
+          const Icon(Icons.error_outline_rounded, color: AppColors.red, size: 48),
+          const SizedBox(height: 16),
           Text(message,
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-          if (onRetry != null) ...
-            [
-              const SizedBox(height: 16),
-              TextButton(
+          if (onRetry != null) ...[
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
                 onPressed: onRetry,
-                child: const Text('Retry', style: TextStyle(color: AppColors.accent)),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Retry', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
-            ],
+            ),
+          ],
         ],
       ),
     ),

@@ -1,6 +1,7 @@
 // features/analytics/analytics_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../shared/widgets/loading_state.dart';
 import '../../main.dart' show dioProvider;
 import '../../shared/theme.dart';
 
@@ -108,14 +109,11 @@ class AnalyticsScreen extends ConsumerWidget {
           onPressed: () => ref.invalidate(analyticsProvider))],
       ),
       body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.error_outline, color: AppColors.red, size: 48),
-          const SizedBox(height: 12),
-          const Text('Failed to load analytics', style: TextStyle(color: AppColors.textMuted)),
-          const SizedBox(height: 12),
-          TextButton(onPressed: () => ref.invalidate(analyticsProvider), child: const Text('Retry')),
-        ])),
+        loading: () => const LoadingState(),
+        error: (e, _) => ErrorState(
+          message: 'Failed to load analytics',
+          onRetry: () => ref.invalidate(analyticsProvider),
+        ),
         data: (d) => d.totalTrades == 0 ? const _EmptyState() : _AnalyticsBody(data: d),
       ),
     );

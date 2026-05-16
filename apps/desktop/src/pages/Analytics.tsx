@@ -163,12 +163,14 @@ const Analytics: React.FC = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: risk } = useQuery({
+  const { data: risk, refetch: refetchRisk } = useQuery({
     queryKey: ['portfolio-risk'],
     queryFn: getPortfolioRisk,
-    staleTime: 60 * 1000,   // refresh every minute
+    staleTime: 60 * 1000,
     refetchInterval: 60 * 1000,
   });
+
+  const refetchAll = () => { refetch(); refetchRisk(); };
 
   if (isLoading) return <div className="h-full flex items-center justify-center"><LoadingSpinner size="lg" /></div>;
 
@@ -176,7 +178,10 @@ const Analytics: React.FC = () => {
     <div className="h-full flex flex-col items-center justify-center text-center gap-4">
       <AlertCircle size={48} className="text-red" />
       <p className="text-text-muted">Failed to load analytics</p>
-      <button onClick={() => refetch()} className="text-accent text-sm font-bold hover:underline">Retry</button>
+      <button onClick={refetchAll}
+        className="px-6 py-2.5 bg-accent text-background font-bold rounded-xl hover:bg-accent/90 transition-all">
+        Retry
+      </button>
     </div>
   );
 
@@ -195,7 +200,7 @@ const Analytics: React.FC = () => {
             Performance breakdown from closed trades · powered by signal_outcome table
           </p>
         </div>
-        <button onClick={() => refetch()} disabled={isFetching}
+        <button onClick={refetchAll} disabled={isFetching}
           className="flex items-center gap-2 text-xs font-bold text-text-muted hover:text-accent transition-colors disabled:opacity-50">
           <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} /> Refresh
         </button>

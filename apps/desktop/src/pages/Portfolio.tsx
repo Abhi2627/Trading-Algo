@@ -28,7 +28,8 @@ import {
   Target, 
   ShieldAlert,
   Info,
-  PlusCircle
+  PlusCircle,
+  AlertCircle
 } from 'lucide-react';
 
 const formatINR = (v: number) =>
@@ -43,17 +44,19 @@ const Portfolio: React.FC = () => {
   const [topupAmount, setTopupAmount] = useState('');
   const [topupOpen, setTopupOpen] = useState(false);
 
-  const { data: wallet, isLoading, isError } = useQuery<WalletSummary>({
+  const { data: wallet, isLoading, isError, refetch: refetchWallet } = useQuery<WalletSummary>({
     queryKey: queryKeys.wallet,
     queryFn: getWalletSummary,
     refetchInterval: 15000,
     placeholderData: (prev) => prev,
   });
 
-  const { data: history } = useQuery<TradeHistory>({
+  const { data: history, refetch: refetchHistory } = useQuery<TradeHistory>({
     queryKey: queryKeys.tradeHistory,
     queryFn: () => getTradeHistory(50),
   });
+
+  const refetchAll = () => { refetchWallet(); refetchHistory(); };
 
   const closeMutation = useMutation({
     mutationFn: (tradeId: string) => closeTrade(tradeId),
@@ -86,7 +89,17 @@ const Portfolio: React.FC = () => {
   }));
 
   if (isLoading) return <div className="h-full flex items-center justify-center"><LoadingSpinner size="lg" /></div>;
-  if (isError || !wallet) return <div className="p-8 text-center text-red">Failed to load portfolio data.</div>;
+  if (isError || !wallet) return (
+    <div className="h-full flex flex-col items-center justify-center text-center gap-4">
+      <AlertCircle size={48} className="text-red" />
+      <h2 className="text-xl font-bold">Failed to load portfolio</h2>
+      <p className="text-text-secondary text-sm">Make sure the backend is running</p>
+      <button onClick={refetchAll}
+        className="px-6 py-2.5 bg-accent text-background font-bold rounded-xl hover:bg-accent/90 transition-all">
+        Retry
+      </button>
+    </div>
+  );
 
   return (
     <div className="space-y-8">

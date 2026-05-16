@@ -22,15 +22,16 @@ const Dashboard: React.FC = () => {
   const { 
     data: wallet, 
     isLoading: isWalletLoading, 
-    isError: isWalletError 
+    isError: isWalletError,
+    refetch: refetchWallet,
   } = useQuery({
     queryKey: queryKeys.wallet,
     queryFn: getWalletSummary,
-    refetchInterval: 15000,   // refresh every 15 seconds
-    placeholderData: (prev) => prev,  // keep showing old data while refreshing
+    refetchInterval: 15000,
+    placeholderData: (prev) => prev,
   });
 
-  const { data: topPicksData, isLoading: isSignalsLoading } = useQuery<TopPick[]>({
+  const { data: topPicksData, isLoading: isSignalsLoading, refetch: refetchSignals } = useQuery<TopPick[]>({
     queryKey: queryKeys.topPicks,
     queryFn: async () => {
       const res = await getTopPicks(10);
@@ -42,16 +43,22 @@ const Dashboard: React.FC = () => {
         return true;
       }).slice(0, 5);
     },
-    refetchInterval: 60000,   // refresh every 60 seconds
+    refetchInterval: 60000,
     placeholderData: (prev) => prev,
   });
 
-  const { data: marketStatus } = useQuery({
+  const { data: marketStatus, refetch: refetchMarket } = useQuery({
     queryKey: ['market-status'],
     queryFn: getMarketStatus,
     refetchInterval: 60 * 1000,
     placeholderData: (prev) => prev,
   });
+
+  const refetchAll = () => {
+    refetchWallet();
+    refetchSignals();
+    refetchMarket();
+  };
 
   if (isWalletLoading || isSignalsLoading) {
     return (
@@ -63,10 +70,16 @@ const Dashboard: React.FC = () => {
 
   if (isWalletError) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-center">
-        <AlertCircle size={48} className="text-red mb-4" />
-        <h2 className="text-xl font-bold mb-2">Failed to fetch data</h2>
-        <p className="text-text-secondary">Make sure the backend is running</p>
+      <div className="h-full flex flex-col items-center justify-center text-center gap-4">
+        <AlertCircle size={48} className="text-red" />
+        <h2 className="text-xl font-bold">Failed to fetch data</h2>
+        <p className="text-text-secondary text-sm">Make sure the backend is running</p>
+        <button
+          onClick={refetchAll}
+          className="px-6 py-2.5 bg-accent text-background font-bold rounded-xl hover:bg-accent/90 transition-all"
+        >
+          Retry
+        </button>
       </div>
     );
   }
