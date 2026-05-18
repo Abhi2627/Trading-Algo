@@ -191,7 +191,7 @@ class _SignalsScreenState extends ConsumerState<SignalsScreen>
 // Market browser — sections + search
 // ---------------------------------------------------------------------------
 
-class _MarketBrowser extends ConsumerWidget {
+class _MarketBrowser extends ConsumerStatefulWidget {
   final String search;
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearchChanged;
@@ -205,9 +205,48 @@ class _MarketBrowser extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sectionsAsync = ref.watch(sectionsProvider);
-    final assetsAsync = ref.watch(assetsProvider);
+  ConsumerState<_MarketBrowser> createState() => _MarketBrowserState();
+}
+
+class _MarketBrowserState extends ConsumerState<_MarketBrowser> {
+  String _activeIndex = 'All';
+
+  static const Map<String, List<String>> _indexSymbols = {
+    'All': [],
+    'Nifty 50': [
+      'NSE:RELIANCE','NSE:TCS','NSE:HDFCBANK','NSE:INFY','NSE:ICICIBANK',
+      'NSE:SBIN','NSE:BHARTIARTL','NSE:ITC','NSE:KOTAKBANK','NSE:LT',
+      'NSE:AXISBANK','NSE:WIPRO','NSE:ULTRACEMCO','NSE:SUNPHARMA','NSE:TITAN',
+      'NSE:BAJFINANCE','NSE:NESTLEIND','NSE:POWERGRID','NSE:NTPC','NSE:MARUTI',
+      'NSE:TATAMOTORS','NSE:TECHM','NSE:HCLTECH','NSE:ONGC','NSE:BPCL',
+      'NSE:HINDALCO','NSE:GRASIM','NSE:ADANIENT','NSE:ADANIPORTS','NSE:COALINDIA',
+    ],
+    'Bank Nifty': [
+      'NSE:HDFCBANK','NSE:ICICIBANK','NSE:SBIN','NSE:KOTAKBANK','NSE:AXISBANK',
+      'NSE:INDUSINDBK','NSE:BANDHANBNK','NSE:FEDERALBNK','NSE:IDFCFIRSTB',
+      'NSE:PNB','NSE:BANKBARODA','NSE:CANBK',
+    ],
+    'IT': [
+      'NSE:TCS','NSE:INFY','NSE:WIPRO','NSE:HCLTECH','NSE:TECHM',
+      'NSE:MPHASIS','NSE:LTTS','NSE:PERSISTENT','NSE:COFORGE','NSE:OFSS',
+    ],
+    'Pharma': [
+      'NSE:SUNPHARMA','NSE:DRREDDY','NSE:CIPLA','NSE:DIVISLAB','NSE:BIOCON',
+      'NSE:LUPIN','NSE:AUROPHARMA','NSE:ALKEM','NSE:TORNTPHARM','NSE:IPCALAB',
+    ],
+    'Auto': [
+      'NSE:MARUTI','NSE:TATAMOTORS','NSE:M&M','NSE:BAJAJ-AUTO','NSE:HEROMOTOCO',
+      'NSE:EICHERMOT','NSE:TVSMOTOR','NSE:ASHOKLEY','NSE:BALKRISIND','NSE:BOSCHLTD',
+    ],
+    'FMCG': [
+      'NSE:ITC','NSE:HINDUNILVR','NSE:NESTLEIND','NSE:BRITANNIA','NSE:DABUR',
+      'NSE:GODREJCP','NSE:MARICO','NSE:COLPAL','NSE:TATACONSUM','NSE:VBL',
+    ],
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final assetsAsync  = ref.watch(assetsProvider);
     final topPicksAsync = ref.watch(sectionTopPicksProvider('all'));
 
     return Column(
@@ -216,71 +255,118 @@ class _MarketBrowser extends ConsumerWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: TextField(
-            controller: searchCtrl,
-            onChanged: onSearchChanged,
+            controller: widget.searchCtrl,
+            onChanged: widget.onSearchChanged,
             decoration: const InputDecoration(
               hintText: 'Search stocks...',
-              prefixIcon:
-                  Icon(Icons.search_rounded, color: AppColors.textMuted, size: 20),
+              prefixIcon: Icon(Icons.search_rounded,
+                  color: AppColors.textMuted, size: 20),
             ),
           ),
         ),
 
+        // Index filter pills — horizontal scroll
+        if (widget.search.isEmpty)
+          SizedBox(
+            height: 36,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: _indexSymbols.keys.length,
+              itemBuilder: (_, i) {
+                final idx = _indexSymbols.keys.elementAt(i);
+                final isActive = _activeIndex == idx;
+                return GestureDetector(
+                  onTap: () => setState(() => _activeIndex = idx),
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? AppColors.accent
+                          : AppColors.elevated,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isActive
+                            ? AppColors.accent
+                            : AppColors.borderDef,
+                      ),
+                    ),
+                    child: Text(idx,
+                        style: TextStyle(
+                          color: isActive
+                              ? Colors.white
+                              : AppColors.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        )),
+                  ),
+                );
+              },
+            ),
+          ),
+
+        const SizedBox(height: 8),
+
         Expanded(
-          child: search.isNotEmpty
-              // --- Search results ---
+          child: widget.search.isNotEmpty
+              // Search results
               ? assetsAsync.when(
                   loading: () => const LoadingState(),
                   error: (_, __) => const SizedBox(),
                   data: (assets) {
-                    final results = assets
-                        .where((a) =>
-                            a.symbol
-                                .toLowerCase()
-                                .contains(search.toLowerCase()) ||
-                            a.name
-                                .toLowerCase()
-                                .contains(search.toLowerCase()))
-                        .toList();
+                    final results = assets.where((a) =>
+                        a.symbol.toLowerCase().contains(widget.search.toLowerCase()) ||
+                        a.name.toLowerCase().contains(widget.search.toLowerCase())).toList();
                     return results.isEmpty
                         ? EmptyState(
-                            message: 'No results for "$search"',
+                            message: 'No results for "${widget.search}"',
                             icon: Icons.search_off_rounded)
                         : ListView.builder(
                             itemCount: results.length,
                             itemBuilder: (_, i) =>
-                                _AssetTile(asset: results[i], onTap: onAssetTap),
+                                _AssetTile(asset: results[i], onTap: widget.onAssetTap),
                           );
                   },
                 )
-              // --- Sections view ---
-              : sectionsAsync.when(
+              // Index-filtered list
+              : assetsAsync.when(
                   loading: () => const LoadingState(),
                   error: (e, _) => ErrorState(
-                    message: 'Could not load market sections.',
-                    onRetry: () => ref.invalidate(sectionsProvider),
+                    message: 'Could not load assets.',
+                    onRetry: () => ref.invalidate(assetsProvider),
                   ),
-                  data: (sections) => ListView(
-                    children: [
-                      // Top Potentials strip (global, not per-section)
-                      topPicksAsync.when(
-                        loading: () => const SizedBox(
-                            height: 60, child: LoadingState()),
-                        error: (_, __) => const SizedBox(),
-                        data: (picks) => picks.isEmpty
-                            ? const SizedBox()
-                            : _TopPotentialsStrip(picks: picks),
-                      ),
-                      const SizedBox(height: 8),
-                      // Section cards
-                      ...sections.map((s) => _SectionCard(
-                            section: s,
-                            allTopPicks: topPicksAsync.value ?? [],
-                            onAssetTap: onAssetTap,
-                          )),
-                      const SizedBox(height: 80),
-                    ],
-                  ),
+                  data: (assets) {
+                    final symbols = _indexSymbols[_activeIndex]!;
+                    final filtered = _activeIndex == 'All'
+                        ? assets
+                        : assets.where((a) => symbols.contains(a.symbol)).toList();
+
+                    final picks = topPicksAsync.value ?? [];
+
+                    return ListView(
+                      children: [
+                        // Top potentials strip — only on All tab
+                        if (_activeIndex == 'All' && picks.isNotEmpty)
+                          _TopPotentialsStrip(picks: picks),
+                        if (_activeIndex == 'All' && picks.isNotEmpty)
+                          const SizedBox(height: 8),
+
+                        // Asset list
+                        ...filtered.map((a) => _AssetTile(
+                          asset: a,
+                          onTap: widget.onAssetTap,
+                          highlight: picks.any((p) => p['symbol'] == a.symbol),
+                          pickData: picks.firstWhere(
+                            (p) => p['symbol'] == a.symbol,
+                            orElse: () => {},
+                          ),
+                        )),
+                        const SizedBox(height: 80),
+                      ],
+                    );
+                  },
                 ),
         ),
       ],

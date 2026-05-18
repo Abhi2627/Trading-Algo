@@ -81,12 +81,32 @@ const Portfolio: React.FC = () => {
     },
   });
 
-  const startEquity = 2000;
-  const currentEquity = wallet?.total_equity ?? startEquity;
-  const chartData = Array.from({ length: 30 }, (_, i) => ({
-    date: `Day ${i + 1}`,
-    equity: i === 29 ? currentEquity : startEquity + (currentEquity - startEquity) * (i / 29),
-  }));
+  // Build real equity curve from trade history — not a fake interpolation
+  const startEquity = 11000;
+  const chartData = React.useMemo(() => {
+    if (!history?.trades || history.trades.length === 0) {
+      // No trades yet — flat line at starting equity
+      return [{ date: 'Start', equity: startEquity }];
+    }
+    // Build cumulative equity curve from closed trades
+    let equity = startEquity;
+    const points = [{ date: 'Start', equity }];
+    const sorted = [...history.trades].sort(
+      (a, b) => new Date(a.exit_time || 0).getTime() - new Date(b.exit_time || 0).getTime()
+    );
+    for (const t of sorted) {
+      equity += (t.realized_pnl || 0);
+      points.push({
+        date: t.exit_time ? new Date(t.exit_time).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—',
+        equity: Math.round(equity),
+      });
+    }
+    // Add current equity as last point
+    if (wallet?.total_equity && wallet.total_equity !== equity) {
+      points.push({ date: 'Now', equity: Math.round(wallet.total_equity) });
+    }
+    return points;
+  }, [history, wallet]);
 
   if (isLoading) return <div className="h-full flex items-center justify-center"><LoadingSpinner size="lg" /></div>;
   if (isError || !wallet) return (
@@ -372,7 +392,11 @@ const Portfolio: React.FC = () => {
       <div className="bg-background-surface border border-border-default rounded-xl p-6">
         <div className="flex justify-between items-center mb-8">
           <h2 className="font-bold">Equity Curve</h2>
-          <span className="text-xs text-text-muted italic">starting ₹11,000 — live curve builds as trades complete</span>
+          <span className="text-xs text-text-muted italic">
+            {history?.trades && history.trades.length > 0
+              ? `${history.trades.length} closed trades · real P&L curve`
+              : 'No closed trades yet — curve builds as trades complete'}
+          </span>
         </div>
         <div className="h-[300px] w-full">
           <ResponsiveContainer width="100%" height="100%">

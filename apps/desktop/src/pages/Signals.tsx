@@ -35,9 +35,43 @@ const Signals: React.FC = () => {
   const location = useLocation();
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'All' | 'Equity'>('All');
+  const [activeIndex, setActiveIndex] = useState<string>('All');
   const [explanation, setExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
+
+  // Index definitions — symbols belonging to each NSE index
+  const INDEX_FILTERS: Record<string, string[]> = {
+    'All': [],
+    'Nifty 50': [
+      'NSE:RELIANCE','NSE:TCS','NSE:HDFCBANK','NSE:INFY','NSE:ICICIBANK',
+      'NSE:SBIN','NSE:BHARTIARTL','NSE:ITC','NSE:KOTAKBANK','NSE:LT',
+      'NSE:AXISBANK','NSE:WIPRO','NSE:ULTRACEMCO','NSE:SUNPHARMA','NSE:TITAN',
+      'NSE:BAJFINANCE','NSE:NESTLEIND','NSE:POWERGRID','NSE:NTPC','NSE:MARUTI',
+      'NSE:TATAMOTORS','NSE:TECHM','NSE:HCLTECH','NSE:ONGC','NSE:BPCL',
+      'NSE:HINDALCO','NSE:GRASIM','NSE:ADANIENT','NSE:ADANIPORTS','NSE:COALINDIA',
+    ],
+    'Bank Nifty': [
+      'NSE:HDFCBANK','NSE:ICICIBANK','NSE:SBIN','NSE:KOTAKBANK','NSE:AXISBANK',
+      'NSE:INDUSINDBK','NSE:BANDHANBNK','NSE:FEDERALBNK','NSE:IDFCFIRSTB','NSE:PNB',
+      'NSE:BANKBARODA','NSE:CANBK',
+    ],
+    'IT': [
+      'NSE:TCS','NSE:INFY','NSE:WIPRO','NSE:HCLTECH','NSE:TECHM',
+      'NSE:MPHASIS','NSE:LTTS','NSE:PERSISTENT','NSE:COFORGE','NSE:OFSS',
+    ],
+    'Pharma': [
+      'NSE:SUNPHARMA','NSE:DRREDDY','NSE:CIPLA','NSE:DIVISLAB','NSE:BIOCON',
+      'NSE:LUPIN','NSE:AUROPHARMA','NSE:ALKEM','NSE:TORNTPHARM','NSE:IPCALAB',
+    ],
+    'Auto': [
+      'NSE:MARUTI','NSE:TATAMOTORS','NSE:M&M','NSE:BAJAJ-AUTO','NSE:HEROMOTOCO',
+      'NSE:EICHERMOT','NSE:TVSMOTOR','NSE:ASHOKLEY','NSE:BALKRISIND','NSE:BOSCHLTD',
+    ],
+    'FMCG': [
+      'NSE:ITC','NSE:HINDUNILVR','NSE:NESTLEIND','NSE:BRITANNIA','NSE:DABUR',
+      'NSE:GODREJCP','NSE:MARICO','NSE:COLPAL','NSE:TATACONSUM','NSE:VBL',
+    ],
+  };
 
   // Fetch all assets
   const { data: assetsData, isLoading: isAssetsLoading } = useQuery<AssetsResponse>({
@@ -119,10 +153,11 @@ const Signals: React.FC = () => {
   };
 
   const filteredAssets = assetsData?.assets.filter((asset: Asset) => {
-    const matchesSearch = asset.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    const matchesSearch = asset.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          asset.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTab = activeTab === 'All' || asset.asset_type.toLowerCase() === activeTab.toLowerCase();
-    return matchesSearch && matchesTab;
+    const indexSymbols = INDEX_FILTERS[activeIndex];
+    const matchesIndex = activeIndex === 'All' || indexSymbols.includes(asset.symbol);
+    return matchesSearch && matchesIndex;
   });
 
   const ScoreBar = ({ label, value }: { label: string, value: number }) => {
@@ -177,16 +212,19 @@ const Signals: React.FC = () => {
             />
           </div>
 
-          <div className="flex bg-background-primary p-1 rounded-lg border border-border-default">
-            {(['All', 'Equity'] as const).map(tab => (
+          {/* Index filter pills */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+            {Object.keys(INDEX_FILTERS).map(idx => (
               <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
-                  activeTab === tab ? 'bg-background-elevated text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'
+                key={idx}
+                onClick={() => setActiveIndex(idx)}
+                className={`shrink-0 px-3 py-1.5 text-xs font-bold rounded-full border transition-all ${
+                  activeIndex === idx
+                    ? 'bg-accent text-background border-accent'
+                    : 'bg-background-elevated text-text-muted border-border-default hover:border-accent/50 hover:text-text-primary'
                 }`}
               >
-                {tab}
+                {idx}
               </button>
             ))}
           </div>
