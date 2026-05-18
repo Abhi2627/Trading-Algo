@@ -264,6 +264,30 @@ async def resume_trading(
     return await get_wallet_service().resume_trading(db)
 
 
+@router.get("/retrain/status")
+async def get_retrain_status(
+    db: AsyncSession = Depends(get_db),
+    _: str = Security(verify_key),
+):
+    """
+    Returns the last retraining run result.
+    Shown in the Settings page so you know if Kaggle ran successfully.
+    """
+    import json
+    wallet_r = await db.execute(select(PaperWallet).limit(1))
+    wallet   = wallet_r.scalar_one_or_none()
+    if not wallet or not wallet.notes:
+        return {"last_retrain": None, "message": "No retraining has run yet"}
+    try:
+        notes = json.loads(wallet.notes)
+        last  = notes.get("last_retrain")
+        if not last:
+            return {"last_retrain": None, "message": "No retraining has run yet"}
+        return {"last_retrain": last}
+    except Exception:
+        return {"last_retrain": None, "message": "Could not parse retrain status"}
+
+
 @router.post("/retrain")
 async def trigger_retrain(
     _: str = Security(verify_key),

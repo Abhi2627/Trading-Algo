@@ -12,6 +12,7 @@ const Portfolio = lazy(() => import('./pages/Portfolio'));
 const Chat      = lazy(() => import('./pages/Chat'));
 const Analytics = lazy(() => import('./pages/Analytics'));
 const Backtest  = lazy(() => import('./pages/Backtest'));
+const Settings  = lazy(() => import('./pages/Settings'));
 
 const queryClient = new QueryClient({
   defaultOptions: {

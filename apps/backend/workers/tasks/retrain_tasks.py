@@ -40,21 +40,58 @@ def retrain_models():
 
 async def _retrain_async() -> dict:
     from core.config import settings
+    import json
+    from datetime import datetime, timezone
+
+    run_start = datetime.now(timezone.utc)
+
+    async def _persist_result(result: dict):
+        """Store retrain result in DB for visibility via API."""
+        try:
+            from core.database import AsyncSessionLocal
+            from core.models import PaperWallet
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as db:
+                wallet_r = await db.execute(select(PaperWallet).limit(1))
+                wallet = wallet_r.scalar_one_or_none()
+                if wallet:
+                    existing = {}
+                    if wallet.notes:
+                        try:
+                            existing = json.loads(wallet.notes)
+                        except Exception:
+                            existing = {}
+                    existing['last_retrain'] = {
+                        **result,
+                        'run_at': run_start.isoformat(),
+                        'finished_at': datetime.now(timezone.utc).isoformat(),
+                    }
+                    wallet.notes = json.dumps(existing)
+                    await db.commit()
+                    logger.info("Retrain result persisted to DB")
+        except Exception as e:
+            logger.warning(f"Failed to persist retrain result: {e}")
 
     # Guard: skip if Kaggle not configured
     if not settings.KAGGLE_USERNAME or not settings.KAGGLE_API_KEY:
         logger.warning("Kaggle credentials not configured — skipping retraining")
-        return {"skipped": True, "reason": "kaggle_not_configured"}
+        result = {"skipped": True, "reason": "kaggle_not_configured", "success": False}
+        await _persist_result(result)
+        return result
 
     if not settings.KAGGLE_NOTEBOOK_ID or not settings.KAGGLE_DATASET_ID:
         logger.warning("KAGGLE_NOTEBOOK_ID or KAGGLE_DATASET_ID not set — skipping")
-        return {"skipped": True, "reason": "notebook_or_dataset_not_configured"}
+        result = {"skipped": True, "reason": "notebook_or_dataset_not_configured", "success": False}
+        await _persist_result(result)
+        return result
 
     # 1. Count available training samples
     sample_count = await _count_outcomes()
     if sample_count < MIN_SAMPLES:
         logger.info(f"Only {sample_count} outcomes available, need {MIN_SAMPLES} — skipping")
-        return {"skipped": True, "reason": "insufficient_samples", "count": sample_count}
+        result = {"skipped": True, "reason": "insufficient_samples", "count": sample_count, "success": False}
+        await _persist_result(result)
+        return result
 
     logger.info(f"Starting retraining pipeline with {sample_count} outcome samples")
 
@@ -75,7 +112,9 @@ async def _retrain_async() -> dict:
     success = await _poll_notebook(kernel_slug, settings)
     if not success:
         logger.error("Kaggle notebook failed or timed out")
-        return {"success": False, "reason": "notebook_failed_or_timeout"}
+        result = {"success": False, "reason": "notebook_failed_or_timeout", "samples_used": sample_count}
+        await _persist_result(result)
+        return result
 
     # 6. Download model files
     downloaded = await _download_model_files(kernel_slug, settings)
@@ -84,13 +123,15 @@ async def _retrain_async() -> dict:
     # 7. Hot-reload forecaster in this worker process
     _reload_forecaster()
 
-    return {
+    result = {
         "success":       True,
         "samples_used":  sample_count,
         "kernel_slug":   kernel_slug,
         "files_updated": downloaded,
         "retrained_at":  date.today().isoformat(),
     }
+    await _persist_result(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
