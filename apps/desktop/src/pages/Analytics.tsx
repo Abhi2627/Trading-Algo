@@ -236,7 +236,7 @@ const Analytics: React.FC = () => {
                 {(() => {
                   const pct_used = risk.heat.pct_used;
                   const color = pct_used > 80 ? '#ef4444' : pct_used > 60 ? '#f59e0b' : '#22c55e';
-                  const r = 40, cx = 52, cy = 52;
+                  const r = 40, cx = 52;
                   const circ = 2 * Math.PI * r;
                   const arc  = circ * 0.75;  // 270 degree arc
                   const filled = arc * Math.min(pct_used / 100, 1);

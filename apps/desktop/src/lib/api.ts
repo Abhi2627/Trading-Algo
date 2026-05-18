@@ -401,19 +401,5 @@ export interface PortfolioPosition {
   heat:           number;
 }
 
-export interface PortfolioRisk {
-  positions:       PortfolioPosition[];
-  correlation:     Record<string, Record<string, number>>;
-  heat:            { total: number; max: number; pct_used: number };
-  sector_exposure: Record<string, number>;
-  risk_flags:      string[];
-  equity:          number;
-  risk_summary:    string;
-}
-
-export const getPortfolioRisk = async (): Promise<PortfolioRisk> => {
-  const { data } = await api.get<PortfolioRisk>('/wallet/portfolio-risk');
-  return data;
-};
 
 export default api;
