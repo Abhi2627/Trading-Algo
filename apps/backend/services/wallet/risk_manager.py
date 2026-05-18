@@ -19,9 +19,30 @@ TAKE_PROFIT_PCT  = 0.08   # Fallback fixed TP — used when ATR fetch fails
 MIN_CONFIDENCE   = 0.70   # Raised from 0.60 — real edge starts at 70%+
 TIME_EXIT_DAYS   = 7      # Raised from 3 — positional trades need time to play out
 
-# ATR-based SL/TP multipliers
-# SL = entry - ATR_SL_MULT * ATR(14)   → 2x ATR below entry
-# TP = entry + ATR_TP_MULT * ATR(14)   → 4x ATR above entry (2:1 RR)
+# ---------------------------------------------------------------------------
+# Stock-specific risk overrides
+# PSU banks: higher beta, policy-sensitive — need wider stops and lower allocation
+# ---------------------------------------------------------------------------
+_PSU_BANKS = {
+    'SBIN', 'PNB', 'CANBK', 'BANKBARODA', 'UNIONBANK',
+    'BANKINDIA', 'MAHABANK', 'INDIANB', 'PSB', 'UCOBANK'
+}
+
+# Maximum single-position allocation regardless of Kelly
+MAX_SINGLE_POSITION_PCT  = 0.30   # hard cap: never more than 30% in one stock
+MAX_PSU_POSITION_PCT     = 0.15   # PSU banks: max 15% due to policy risk
+
+
+def get_stock_atr_mult(symbol: str) -> tuple[float, float]:
+    """
+    Return (sl_mult, tp_mult) for a given stock.
+    PSU banks get wider stops due to high intraday volatility.
+    """
+    ticker = symbol.split(':')[-1].upper()
+    if ticker in _PSU_BANKS:
+        return 2.5, 5.0   # wider SL, wider TP for PSU banks
+    return ATR_SL_MULT, ATR_TP_MULT
+
 ATR_SL_MULT      = 2.0
 ATR_TP_MULT      = 4.0
 ATR_PERIOD       = 14
@@ -67,8 +88,11 @@ def compute_atr_stops(
         if atr <= 0 or pd.isna(atr):
             raise ValueError(f"Invalid ATR: {atr}")
 
-        raw_sl = entry_price - ATR_SL_MULT * atr
-        raw_tp = entry_price + ATR_TP_MULT * atr
+        # Use stock-specific multipliers (PSU banks get wider stops)
+        sl_mult, tp_mult = get_stock_atr_mult(symbol)
+
+        raw_sl = entry_price - sl_mult * atr
+        raw_tp = entry_price + tp_mult * atr
 
         # Clamp to hard-cap bands
         sl_pct = (entry_price - raw_sl) / entry_price

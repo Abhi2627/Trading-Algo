@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 # ── Portfolio-level constraints (the ONLY hardcoded limits) ─────────────────
 
 MAX_PORTFOLIO_HEAT     = 0.20   # max 20% of equity at risk simultaneously
-MAX_SINGLE_POSITION    = 0.35   # no single stock > 35% of equity
+MAX_SINGLE_POSITION    = 0.30   # no single stock > 30% of equity (reduced from 35%)
+MAX_PSU_POSITION       = 0.15   # PSU bank stocks capped at 15% due to policy risk
 MAX_SECTOR_EXPOSURE    = 0.40   # no sector > 40% of equity
 MIN_POSITION_SIZE_INR  = 500    # don't open positions smaller than ₹500
 KELLY_FRACTION         = 0.5    # half-Kelly throughout
@@ -163,8 +164,13 @@ class PortfolioEngine:
                 continue
 
             # Compute this position's allocation
+            # PSU banks get a tighter cap due to policy/volatility risk
+            from services.wallet.risk_manager import _PSU_BANKS
+            ticker = sig.symbol.split(':')[-1].upper()
+            single_cap = MAX_PSU_POSITION if ticker in _PSU_BANKS else MAX_SINGLE_POSITION
+
             raw_alloc    = sig.kelly_fraction * KELLY_FRACTION
-            raw_alloc    = min(raw_alloc, MAX_SINGLE_POSITION)
+            raw_alloc    = min(raw_alloc, single_cap)
             position_inr = total_equity * raw_alloc
             position_inr = min(position_inr, remaining_cash * 0.95)
 
