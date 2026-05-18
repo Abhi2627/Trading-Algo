@@ -12,6 +12,28 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# In-memory OHLCV cache — avoids repeated downloads during the same session
+# TTL: 6 hours for daily data (market data doesn't change intraday)
+# ---------------------------------------------------------------------------
+import time as _time
+
+_OHLCV_CACHE: dict = {}   # symbol -> (df, timestamp)
+_OHLCV_TTL   = 6 * 3600   # 6 hours
+_PRICE_CACHE: dict = {}   # symbol -> (price, timestamp)
+_PRICE_TTL   = 30          # 30 seconds (used by real-time monitor)
+
+
+def _cache_get(cache: dict, key: str, ttl: int):
+    entry = cache.get(key)
+    if entry and (_time.time() - entry[1]) < ttl:
+        return entry[0]
+    return None
+
+
+def _cache_set(cache: dict, key: str, value):
+    cache[key] = (value, _time.time())
+
 # NseIndia session — singleton
 _nse: Optional[object] = None
 _nse_dir = tempfile.mkdtemp(prefix='nse_')
@@ -137,40 +159,61 @@ def _fetch_yfinance_historical(symbol: str, period_days: int, interval: str) -> 
 
 def fetch_historical(
     symbol: str,
-    period_days: int = 730,
+    period_days: int = 365,
     interval: str = "1d",
 ) -> Optional[pd.DataFrame]:
     """
     Download historical OHLCV.
+    Caches results for 6 hours to avoid repeated yfinance/NSE calls.
     Tries NseIndiaApi first (cloud-compatible), falls back to yfinance.
     """
+    cache_key = f"{symbol}:{period_days}:{interval}"
+    cached = _cache_get(_OHLCV_CACHE, cache_key, _OHLCV_TTL)
+    if cached is not None:
+        logger.debug(f"Cache hit: {symbol} ({len(cached)} rows)")
+        return cached
+
+    df = None
     if symbol.startswith("NSE:") and interval == "1d":
         df = _fetch_nse_historical(symbol, period_days)
         if df is not None and len(df) >= 30:
+            _cache_set(_OHLCV_CACHE, cache_key, df)
             return df
-        time.sleep(0.3)
+        _time.sleep(0.3)
 
-    return _fetch_yfinance_historical(symbol, period_days, interval)
+    df = _fetch_yfinance_historical(symbol, period_days, interval)
+    if df is not None:
+        _cache_set(_OHLCV_CACHE, cache_key, df)
+    return df
 
 
 def fetch_latest_price(symbol: str) -> Optional[float]:
-    """Get most recent price using NSE quote API."""
+    """Get most recent price using NSE quote API. Cached for 30 seconds."""
+    cached = _cache_get(_PRICE_CACHE, symbol, _PRICE_TTL)
+    if cached is not None:
+        return cached
+
+    price = None
     if symbol.startswith("NSE:"):
         ticker = _nse_ticker(symbol)
         nse    = _get_nse()
         if nse:
             try:
                 data  = nse.quote(ticker)
-                price = data.get("priceInfo", {}).get("lastPrice")
-                if price:
-                    return float(price)
+                p     = data.get("priceInfo", {}).get("lastPrice")
+                if p:
+                    price = float(p)
             except Exception as e:
                 logger.warning(f"NSE quote failed for {symbol}: {e}")
 
-    df = fetch_historical(symbol, period_days=5, interval="1d")
-    if df is not None and not df.empty:
-        return float(df["close"].iloc[-1])
-    return None
+    if price is None:
+        df = fetch_historical(symbol, period_days=5, interval="1d")
+        if df is not None and not df.empty:
+            price = float(df["close"].iloc[-1])
+
+    if price is not None:
+        _cache_set(_PRICE_CACHE, symbol, price)
+    return price
 
 
 def fetch_batch_latest_prices(symbols: list[str]) -> dict[str, Optional[float]]:

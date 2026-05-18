@@ -79,7 +79,11 @@ async def _scan_all_assets_async() -> dict:
         assets = result.scalars().all()
         logger.info(f"Scanning {len(assets)} assets for signals")
 
-        for asset in assets:
+        # Process in parallel batches of 8 to avoid overloading NSE API
+        import asyncio
+        BATCH_SIZE = 8
+
+        async def _process_asset(asset):
             try:
                 signal = await generate_signal(symbol=asset.symbol, db=db)
                 if signal:
@@ -95,7 +99,14 @@ async def _scan_all_assets_async() -> dict:
             except Exception as e:
                 logger.error(f"Signal failed for {asset.symbol}: {e}")
                 results["failed"] += 1
-                continue
+
+        # Process in batches
+        for i in range(0, len(assets), BATCH_SIZE):
+            batch = assets[i:i + BATCH_SIZE]
+            await asyncio.gather(*[_process_asset(a) for a in batch])
+            # Small delay between batches to avoid rate limiting
+            if i + BATCH_SIZE < len(assets):
+                await asyncio.sleep(1.0)
 
         await db.commit()
 
