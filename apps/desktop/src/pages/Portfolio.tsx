@@ -350,29 +350,44 @@ const Portfolio: React.FC = () => {
             <thead className="text-[10px] text-text-muted uppercase bg-background-elevated/50 font-bold tracking-wider">
               <tr>
                 <th className="px-6 py-4">Symbol</th>
-                <th className="px-6 py-4">Action</th>
+                <th className="px-6 py-4">Type</th>
                 <th className="px-6 py-4 text-right">Entry</th>
                 <th className="px-6 py-4 text-right">Exit</th>
                 <th className="px-6 py-4 text-right">P&L</th>
-                <th className="px-6 py-4 text-right">Date</th>
+                <th className="px-6 py-4 text-right">Date / Reason</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-default text-sm">
               {history?.trades.map((item: TradeHistoryItem, idx: number) => (
                 <tr key={idx} className="hover:bg-background-elevated/30 transition-colors">
-                  <td className="px-6 py-4 font-bold text-text-primary">{item.symbol}</td>
+                  <td className="px-6 py-4 font-bold text-text-primary">
+                    {item.symbol.split(':').pop()}
+                    <div className="text-[10px] text-text-muted font-normal">{item.name}</div>
+                  </td>
                   <td className="px-6 py-4">
                     <span className="text-[10px] px-2 py-0.5 rounded font-black uppercase bg-indigo/10 text-indigo-400">
-                      {item.action}
+                      {item.trade_type}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-mono">{formatINR(item.entry_price)}</td>
                   <td className="px-6 py-4 text-right font-mono">{formatINR(item.exit_price)}</td>
-                  <td className={`px-6 py-4 text-right font-bold font-mono ${item.realized_pnl >= 0 ? 'text-green' : 'text-red'}`}>
-                    {item.realized_pnl >= 0 ? '+' : ''}{formatINR(item.realized_pnl)}
+                  <td className={`px-6 py-4 text-right font-bold font-mono ${
+                    item.realized_pnl >= 0 ? 'text-green' : 'text-red'
+                  }`}>
+                    <div>{item.realized_pnl >= 0 ? '+' : ''}{formatINR(item.realized_pnl)}</div>
+                    <div className="text-[10px] opacity-70">{item.pnl_pct >= 0 ? '+' : ''}{item.pnl_pct?.toFixed(2)}%</div>
                   </td>
-                  <td className="px-6 py-4 text-right text-text-muted text-xs">
-                    {item.exit_time ? new Date(item.exit_time).toLocaleDateString() : 'N/A'}
+                  <td className="px-6 py-4 text-right">
+                    <div className="text-xs text-text-muted">
+                      {item.exit_time ? new Date(item.exit_time).toLocaleDateString('en-IN', {
+                        day: '2-digit', month: 'short', year: '2-digit'
+                      }) : 'Open'}
+                    </div>
+                    {item.notes && (
+                      <div className="text-[10px] text-text-muted/70 capitalize">
+                        {item.notes.replace(/_/g, ' ')}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
