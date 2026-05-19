@@ -69,6 +69,8 @@ def check_stop_losses():
 
 
 async def _check_stop_losses_async() -> dict:
+    from core import database as _db_module
+    await _db_module.engine.dispose()
     from core.database import AsyncSessionLocal
     from core.models import Trade, Asset, TradeStatus
     from sqlalchemy import select
@@ -218,8 +220,9 @@ def force_close_intraday():
 
 
 async def _force_close_intraday_async() -> dict:
+    from core import database as _db_module
+    await _db_module.engine.dispose()
     from core.database import AsyncSessionLocal
-    from core.models import Trade, Asset, TradeStatus, TradeType
     from sqlalchemy import select
     from services.wallet.wallet_service import get_wallet_service
 
@@ -269,6 +272,8 @@ def apply_monthly_topup():
 
 
 async def _apply_topup_async() -> dict:
+    from core import database as _db_module
+    await _db_module.engine.dispose()
     from core.database import AsyncSessionLocal
     from services.wallet.wallet_service import get_wallet_service
 

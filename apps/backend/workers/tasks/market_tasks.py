@@ -44,6 +44,8 @@ def scan_all_assets(self):
     if exc_holder[0]:
         raise self.retry(exc=exc_holder[0], countdown=60)
 
+    import time
+    time.sleep(2)
     auto_execute_trades.delay()
     return result
 
@@ -53,6 +55,10 @@ async def _scan_all_assets_async() -> dict:
     _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if _root not in sys.path:
         sys.path.insert(0, _root)
+
+    # Dispose engine so it rebinds to this thread's new event loop
+    from core import database as _db_module
+    await _db_module.engine.dispose()
 
     from core.database import AsyncSessionLocal, init_db
     from core.models import Asset, AssetType
@@ -140,6 +146,11 @@ async def _auto_execute_async() -> dict:
     _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if _root not in sys.path:
         sys.path.insert(0, _root)
+
+    # Dispose and recreate the engine so it binds to THIS thread's event loop
+    # This is required because asyncpg connections are loop-bound
+    from core import database as _db_module
+    await _db_module.engine.dispose()
 
     from datetime import datetime, timezone, timedelta, date
     from core.database import AsyncSessionLocal, init_db
