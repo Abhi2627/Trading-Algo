@@ -79,36 +79,37 @@ async def _scan_all_assets_async() -> dict:
         assets = result.scalars().all()
         logger.info(f"Scanning {len(assets)} assets for signals")
 
-        # Process in parallel batches of 8 to avoid overloading NSE API
+        # Process in parallel batches of 5
+        # Each asset gets its OWN db session — asyncpg sessions are not concurrent-safe
         import asyncio
-        BATCH_SIZE = 8
+        BATCH_SIZE = 5
 
-        async def _process_asset(asset):
+        async def _process_asset(symbol: str):
             try:
-                signal = await generate_signal(symbol=asset.symbol, db=db)
-                if signal:
-                    results["generated"] += 1
-                    logger.info(
-                        f"Signal: {asset.symbol} {signal['action'].upper()} "
-                        f"conf={signal['confidence']:.2f} "
-                        f"regime={signal.get('market_regime','?')} "
-                        f"fscore={signal.get('fundamental_score','?')}"
-                    )
-                else:
-                    results["skipped"] += 1
+                async with AsyncSessionLocal() as asset_db:
+                    signal = await generate_signal(symbol=symbol, db=asset_db)
+                    if signal:
+                        results["generated"] += 1
+                        logger.info(
+                            f"Signal: {symbol} {signal['action'].upper()} "
+                            f"conf={signal['confidence']:.2f} "
+                            f"regime={signal.get('market_regime','?')}"
+                        )
+                    else:
+                        results["skipped"] += 1
             except Exception as e:
-                logger.error(f"Signal failed for {asset.symbol}: {e}")
+                logger.error(f"Signal failed for {symbol}: {e}")
                 results["failed"] += 1
 
-        # Process in batches
-        for i in range(0, len(assets), BATCH_SIZE):
-            batch = assets[i:i + BATCH_SIZE]
-            await asyncio.gather(*[_process_asset(a) for a in batch])
-            # Small delay between batches to avoid rate limiting
-            if i + BATCH_SIZE < len(assets):
-                await asyncio.sleep(1.0)
+        asset_symbols = [a.symbol for a in assets]
 
-        await db.commit()
+        for i in range(0, len(asset_symbols), BATCH_SIZE):
+            batch = asset_symbols[i:i + BATCH_SIZE]
+            logger.info(f"Batch {i//BATCH_SIZE + 1}/{(len(asset_symbols)+BATCH_SIZE-1)//BATCH_SIZE}: {batch}")
+            await asyncio.gather(*[_process_asset(sym) for sym in batch],
+                                  return_exceptions=True)
+            if i + BATCH_SIZE < len(asset_symbols):
+                await asyncio.sleep(0.5)
 
     logger.info(
         f"Scan complete: generated={results['generated']} "
