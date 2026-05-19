@@ -72,31 +72,48 @@ class SentimentService:
         )
 
     async def _call_groq(self, prompt: str) -> Optional[dict]:
-        """Call Groq API (OpenAI-compatible, free tier, fast inference)."""
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(
-                    f"{settings.GROQ_BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-                        "Content-Type":  "application/json",
-                    },
-                    json={
-                        "model": settings.GROQ_MODEL,
-                        "messages": [
-                            {"role": "system", "content": SENTIMENT_SYSTEM_PROMPT},
-                            {"role": "user",   "content": prompt},
-                        ],
-                        "max_tokens":  300,
-                        "temperature": 0.1,
-                    },
-                )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
-                return self._parse_json(content)
-        except Exception as e:
-            logger.warning(f"Groq API call failed: {e}")
-            return None
+        """Call Groq API with exponential backoff on 429 rate limit."""
+        import asyncio
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(
+                        f"{settings.GROQ_BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                            "Content-Type":  "application/json",
+                        },
+                        json={
+                            "model": settings.GROQ_MODEL,
+                            "messages": [
+                                {"role": "system", "content": SENTIMENT_SYSTEM_PROMPT},
+                                {"role": "user",   "content": prompt},
+                            ],
+                            "max_tokens":  300,
+                            "temperature": 0.1,
+                        },
+                    )
+                    if response.status_code == 429:
+                        wait = 2 ** attempt * 3  # 3s, 6s, 12s
+                        logger.warning(f"Groq rate limited — retrying in {wait}s (attempt {attempt+1}/3)")
+                        await asyncio.sleep(wait)
+                        continue
+                    response.raise_for_status()
+                    content = response.json()["choices"][0]["message"]["content"]
+                    return self._parse_json(content)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    wait = 2 ** attempt * 3
+                    logger.warning(f"Groq 429 — retrying in {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
+                logger.warning(f"Groq API call failed: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"Groq API call failed: {e}")
+                return None
+        logger.warning("Groq API: all 3 retries failed — falling back")
+        return None
 
     async def _call_nim(self, prompt: str) -> Optional[dict]:
         """Call NVIDIA NIM API (OpenAI-compatible endpoint)."""

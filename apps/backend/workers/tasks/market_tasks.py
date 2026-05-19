@@ -79,70 +79,26 @@ async def _scan_all_assets_async() -> dict:
         assets = result.scalars().all()
         logger.info(f"Scanning {len(assets)} assets for signals")
 
-        asset_symbols = [a.symbol for a in assets]
-
-        # Run each asset in its own isolated thread with its own event loop.
-        # This avoids asyncpg connection pool conflicts from shared loops.
-        import asyncio
-        import concurrent.futures
-
-        def _run_single_asset(symbol: str) -> dict:
-            """Run signal generation for one symbol in a completely isolated thread."""
-            import asyncio as _asyncio
-            result = {'symbol': symbol, 'status': 'failed'}
-            loop = _asyncio.new_event_loop()
-            _asyncio.set_event_loop(loop)
+        # Sequential processing — asyncpg connection pool is process-wide
+        # and cannot be safely shared across threads. Cache makes this fast:
+        # first asset downloads OHLCV, subsequent assets hit the 6h cache.
+        for asset in assets:
             try:
-                async def _inner():
-                    from core.database import AsyncSessionLocal
-                    from services.market_data.signal_pipeline import generate_signal
-                    async with AsyncSessionLocal() as asset_db:
-                        sig = await generate_signal(symbol=symbol, db=asset_db)
-                        return sig
-                sig = loop.run_until_complete(_inner())
-                if sig:
-                    result['status'] = 'generated'
-                    result['signal'] = sig
+                signal = await generate_signal(symbol=asset.symbol, db=db)
+                if signal:
+                    results["generated"] += 1
+                    logger.info(
+                        f"Signal: {asset.symbol} {signal['action'].upper()} "
+                        f"conf={signal['confidence']:.2f} "
+                        f"regime={signal.get('market_regime','?')}"
+                    )
                 else:
-                    result['status'] = 'skipped'
+                    results["skipped"] += 1
             except Exception as e:
-                logger.error(f"Signal failed for {symbol}: {e}")
-                result['error'] = str(e)
-            finally:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.close()
-                _asyncio.set_event_loop(None)
-            return result
+                logger.error(f"Signal failed for {asset.symbol}: {e}")
+                results["failed"] += 1
 
-        # Use ThreadPoolExecutor with max 5 workers (gentle on NSE API)
-        WORKERS = 5
-        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            futures = {executor.submit(_run_single_asset, sym): sym
-                       for sym in asset_symbols}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    res = future.result()
-                    if res['status'] == 'generated':
-                        results['generated'] += 1
-                        sig = res.get('signal', {})
-                        logger.info(
-                            f"Signal: {res['symbol']} "
-                            f"{sig.get('action','?').upper()} "
-                            f"conf={sig.get('confidence',0):.2f} "
-                            f"regime={sig.get('market_regime','?')}"
-                        )
-                    elif res['status'] == 'skipped':
-                        results['skipped'] += 1
-                    else:
-                        results['failed'] += 1
-                except Exception as e:
-                    logger.error(f"Executor error: {e}")
-                    results['failed'] += 1
-
-        logger.info(
-            f"Scan complete: generated={results['generated']} "
-            f"failed={results['failed']} skipped={results['skipped']}"
-        )
+        await db.commit()
 
     return results
 
