@@ -159,7 +159,7 @@ def _fetch_yfinance_historical(symbol: str, period_days: int, interval: str) -> 
 
 def fetch_historical(
     symbol: str,
-    period_days: int = 365,
+    period_days: int = 500,
     interval: str = "1d",
 ) -> Optional[pd.DataFrame]:
     """

@@ -81,9 +81,9 @@ async def generate_signal(
                 'generated_at':   datetime.now(timezone.utc).isoformat(),
             }
 
-        # 3. Fetch OHLCV — 365 days is enough (models use last 60 bars)
-        # First call downloads from NSE/yfinance, subsequent calls use 6h cache
-        df = fetch_historical(symbol, period_days=365, interval="1d")
+        # 3. Fetch OHLCV — 500 days gives EMA200 enough warmup (200 bars)
+        # First call downloads, subsequent calls within 6h use cache
+        df = fetch_historical(symbol, period_days=500, interval="1d")
         if df is None or len(df) < 60:
             logger.error(f"Insufficient data for {symbol}")
             return None
